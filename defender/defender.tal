@@ -1,0 +1,652 @@
+( Defender -- a horizontal shoot-'em-up for Varvara/Uxn.
+  Ported from perso/demo90s.fth (TIC-80 Forth). The ship, the two enemy
+  types and the projectile are the same assets, re-encoded to 1bpp.
+
+  Controls:
+    Arrow keys : move the ship (full width, middle band vertically)
+    A          : start / restart
+    B          : fire (also starts from the title screen, not on game over)
+
+  At 20 points the game switches to "Defender" mode: tapping the BACKWARD
+  arrow reverses the ship facing (and flips the starfield scroll), holding
+  the FORWARD arrow accelerates the stars. )
+
+( ==== devices ==== )
+|00 @System  &vector $2 &expansion $2 &wst $1 &rst $1 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
+|10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
+|20 @Screen  &vector $2 &width $2 &height $2 &auto $1 &pad $1 &x $2 &y $2 &addr $2 &pixel $1 &sprite $1
+|30 @Audio0  &vector $2 &position $2 &output $1 &pad $3 &adsr $2 &length $2 &addr $2 &volume $1 &pitch $1
+|40 @Audio1  &vector $2 &position $2 &output $1 &pad $3 &adsr $2 &length $2 &addr $2 &volume $1 &pitch $1
+|50 @Audio2  &vector $2 &position $2 &output $1 &pad $3 &adsr $2 &length $2 &addr $2 &volume $1 &pitch $1
+|60 @Audio3  &vector $2 &position $2 &output $1 &pad $3 &adsr $2 &length $2 &addr $2 &volume $1 &pitch $1
+|80 @Controller &vector $2 &button $1 &key $1
+
+( ==== constants ==== )
+%MAX-SHOTS { #08 }
+%MAX-ENEM  { #08 }
+%STARS     { #18 }   ( 24 )
+%HIT-DUR   { #28 }   ( 40 frames of damage / invulnerability )
+%INK-SHIP  { #05 }   ( 1bpp transparent, colour 1 = white )
+%INK-EN1   { #0a }   ( colour 2 = green )
+%INK-SHOT  { #0f }   ( colour 3 = orange )
+
+( ==== reset ==== )
+|0100 @reset
+	( palette: c0 dark-blue, c1 white, c2 green, c3 orange )
+	#1f4f .System/r DEO2
+	#2fd8 .System/g DEO2
+	#3f52 .System/b DEO2
+	( screen 240x136 )
+	#00f0 .Screen/width DEO2
+	#0088 .Screen/height DEO2
+	#abcd ;seed STA2
+	#00 ;state STA              ( 0 = title )
+	;init-game JSR2
+	;on-frame .Screen/vector DEO2
+	;on-controller .Controller/vector DEO2
+BRK
+
+( ==== main frame loop ==== )
+@on-frame
+	;frame LDA2 INC2 ;frame STA2
+	( snapshot controller + compute fresh-press edges; merge in "a"/"x" key aliases )
+	.Controller/button DEI ;extra-btn LDA ORA ;btn-now STA
+	#00 ;extra-btn STA
+	;btn-now LDA ;btn-prev LDA #ff EOR AND ;btn-edge STA
+	;btn-now LDA ;btn-prev STA
+	( state machine )
+	;state LDA #00 EQU ;&title JCN2
+	;state LDA #02 EQU ;&over JCN2
+	( --- state 1: playing --- )
+	;update-ship-move JSR2
+	;btn-edge LDA #02 AND #00 EQU ;&nofire JCN2 ;fire-shot JSR2 &nofire
+	;score LDA2 #0014 LTH2 #00 EQU ;&setdef JCN2 ;&afterdef JMP2
+	&setdef #01 ;defender STA
+	&afterdef
+	;update-defender JSR2
+	;update-shots JSR2
+	;try-spawn JSR2
+	;update-enemies JSR2
+	;collide-shots JSR2
+	;collide-ship JSR2
+	;update-stars JSR2
+	;hit-timer LDA #00 EQU ;&noht JCN2 ;hit-timer LDA #01 SUB ;hit-timer STA &noht
+	;lives LDA #00 EQU ;&dead JCN2 ;&draw JMP2
+	&dead #02 ;state STA
+	&draw
+	;draw-scene JSR2
+	BRK
+	&title
+		;draw-title JSR2
+		;btn-edge LDA #03 AND #00 EQU ;&t-end JCN2 ;init-game JSR2 #01 ;state STA
+		&t-end
+		BRK
+	&over
+		;draw-scene JSR2
+		;draw-over JSR2
+		;btn-edge LDA #01 AND #00 EQU ;&o-end JCN2 ;init-game JSR2 #01 ;state STA
+		&o-end
+BRK
+
+( raw-key aliases: "a" = button A, "x" = button B.
+  Fed by Controller/key (text-input path); latches into extra-btn, which
+  on-frame OR's into btn-now for one frame then clears (a one-frame "tap"). )
+@on-controller
+	.Controller/key DEI
+	DUP #61 EQU ;&is-a JCN2 ( "a" )
+	DUP #78 EQU ;&is-x JCN2 ( "x" )
+	POP
+BRK
+	&is-a POP #01 ;extra-btn STA
+BRK
+	&is-x POP #02 ;extra-btn STA
+BRK
+
+( ==== init ==== )
+@init-game
+	#0064 ;ship-x STA2 #0040 ;ship-y STA2
+	#00 ;ship-thrust STA #00 ;hit-timer STA
+	;clear-shots JSR2 ;clear-enemies JSR2
+	#0000 ;score STA2 #04 ;lives STA
+	#00 ;defender STA #00 ;face-left STA
+	#28 ;spawn-timer STA
+	;init-stars JSR2
+JMP2r
+
+@clear-shots
+	#00 ;li STA
+	&loop ;li LDA MAX-SHOTS EQU ;&done JCN2
+		#00 ;li LDA ;shot-on-a JSR2 STA
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@clear-enemies
+	#00 ;li STA
+	&loop ;li LDA MAX-ENEM EQU ;&done JCN2
+		#00 ;li LDA ;en-on-a JSR2 STA
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@init-stars
+	#00 ;li STA
+	&loop ;li LDA STARS EQU ;&done JCN2
+		;rnd JSR2 DUP #f0 LTH ;&xok JCN2 #10 SUB &xok #00 SWP ;li LDA ;star-x-a JSR2 STA2
+		;rnd JSR2 #7f AND ;li LDA ;star-y-a JSR2 STA
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+( ==== ship movement ==== )
+@update-ship-move
+	#00 ;ship-thrust STA
+	( left )
+	;btn-now LDA #40 AND #00 EQU ;&skipL JCN2
+		;ship-x LDA2 #0002 SUB2 ;ship-x STA2
+		;ship-x LDA2 #7fff GTH2 #00 EQU ;&skipL JCN2 #0000 ;ship-x STA2
+	&skipL
+	( right )
+	;btn-now LDA #80 AND #00 EQU ;&skipR JCN2
+		;ship-x LDA2 #0002 ADD2 ;ship-x STA2
+		;ship-x LDA2 #00e0 GTH2 #00 EQU ;&rok JCN2 #00e0 ;ship-x STA2
+		&rok #01 ;ship-thrust STA
+	&skipR
+	( up : full height, clamp at 0 -- catches underflow >0x7fff )
+	;btn-now LDA #10 AND #00 EQU ;&skipU JCN2
+		;ship-y LDA2 #0002 SUB2 ;ship-y STA2
+		;ship-y LDA2 #7fff GTH2 #00 EQU ;&skipU JCN2 #0000 ;ship-y STA2
+	&skipU
+	( down : clamp at 128 = screen height 136 - ship 8 )
+	;btn-now LDA #20 AND #00 EQU ;&skipD JCN2
+		;ship-y LDA2 #0002 ADD2 ;ship-y STA2
+		;ship-y LDA2 #0080 GTH2 #00 EQU ;&skipD JCN2 #0080 ;ship-y STA2
+	&skipD
+JMP2r
+
+( ==== defender mode: facing reverse + forward thrust ==== )
+@update-defender
+	;defender LDA #00 EQU ;&done JCN2
+	( forward held -> thrust : forward = facing direction )
+	;face-left LDA #00 EQU ;&fwdR JCN2
+		;btn-now LDA #40 AND #00 NEQ ;&thr JCN2 ;&afthr JMP2
+	&fwdR
+		;btn-now LDA #80 AND #00 NEQ ;&thr JCN2 ;&afthr JMP2
+	&thr #01 ;ship-thrust STA
+	&afthr
+	( backward tap reverses facing )
+	;face-left LDA #00 EQU ;&bwdR JCN2
+		;btn-edge LDA #80 AND #00 NEQ ;&rev JCN2 ;&done JMP2
+	&bwdR
+		;btn-edge LDA #40 AND #00 NEQ ;&rev JCN2 ;&done JMP2
+	&rev
+		;face-left LDA #00 EQU ;&setL JCN2 #00 ;face-left STA ;&done JMP2
+		&setL #01 ;face-left STA
+	&done
+JMP2r
+
+( ==== firing ==== )
+@fire-shot
+	#00 ;li STA
+	&loop ;li LDA MAX-SHOTS EQU ;&done JCN2
+		;li LDA ;shot-on-a JSR2 LDA #00 EQU ;&fill JCN2
+		;li LDA INC ;li STA ;&loop JMP2
+	&fill
+		;face-left LDA #00 NEQ ;&lf JCN2
+			;ship-x LDA2 #000c ADD2 #0004 ;&setxy JMP2
+		&lf
+			;ship-x LDA2 #fffc
+		&setxy
+		( stack: x* vx* )
+		;li LDA ;shot-vx-a JSR2 STA2
+		;li LDA ;shot-x-a JSR2 STA2
+		;ship-y LDA2 ;li LDA ;shot-y-a JSR2 STA2
+		#01 ;li LDA ;shot-on-a JSR2 STA
+		;sfx-fire JSR2
+	&done
+JMP2r
+
+@update-shots
+	#00 ;li STA
+	&loop ;li LDA MAX-SHOTS EQU ;&done JCN2
+		;li LDA ;shot-on-a JSR2 LDA #00 EQU ;&next JCN2
+		;li LDA ;shot-x-a JSR2 LDA2 ;li LDA ;shot-vx-a JSR2 LDA2 ADD2 ;li LDA ;shot-x-a JSR2 STA2
+		;li LDA ;shot-x-a JSR2 LDA2 #00f0 GTH2 #00 EQU ;&next JCN2
+		#00 ;li LDA ;shot-on-a JSR2 STA
+		&next ;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+( ==== enemies ==== )
+@try-spawn
+	;spawn-timer LDA #00 EQU ;&go JCN2
+	;spawn-timer LDA #01 SUB ;spawn-timer STA
+	;&done JMP2
+	&go
+		;spawn-enemy JSR2
+		;rnd JSR2 #1f AND #1e ADD ;spawn-timer STA   ( next in 30..61 )
+	&done
+JMP2r
+
+@spawn-enemy
+	#00 ;li STA
+	&loop ;li LDA MAX-ENEM EQU ;&done JCN2
+		;li LDA ;en-on-a JSR2 LDA #00 EQU ;&fill JCN2
+		;li LDA INC ;li STA ;&loop JMP2
+	&fill
+		;rnd JSR2 #01 AND #01 ADD ;li LDA ;en-type-a JSR2 STA   ( type 1 or 2 )
+		;rnd JSR2 #01 AND #00 EQU ;&fromL JCN2
+			#00e8 ;li LDA ;en-x-a JSR2 STA2    ( from right )
+			#ffff ;li LDA ;en-vx-a JSR2 STA2
+			#00   ;li LDA ;en-flip-a JSR2 STA
+			;&sety JMP2
+		&fromL
+			#0000 ;li LDA ;en-x-a JSR2 STA2    ( from left )
+			#0001 ;li LDA ;en-vx-a JSR2 STA2
+			#10   ;li LDA ;en-flip-a JSR2 STA  ( face right )
+		&sety
+		;rnd JSR2 #7f AND #08 ADD              ( row 8..135, full height )
+		DUP #7c GTH ;&clmp JCN2 ;&yok JMP2 &clmp POP #7c &yok
+		#00 SWP ;li LDA ;en-y-a JSR2 STA2
+		#01 ;li LDA ;en-on-a JSR2 STA
+	&done
+JMP2r
+
+@update-enemies
+	#00 ;li STA
+	&loop ;li LDA MAX-ENEM EQU ;&done JCN2
+		;li LDA ;en-on-a JSR2 LDA #00 EQU ;&next JCN2
+		;li LDA ;en-x-a JSR2 LDA2 ;li LDA ;en-vx-a JSR2 LDA2 ADD2 ;li LDA ;en-x-a JSR2 STA2
+		;li LDA ;en-x-a JSR2 LDA2 #00f0 GTH2 #00 EQU ;&next JCN2
+		#00 ;li LDA ;en-on-a JSR2 STA
+		&next ;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+( ==== collisions ==== )
+@collide-shots
+	#00 ;li STA
+	&eloop ;li LDA MAX-ENEM EQU ;&edone JCN2
+		;li LDA ;en-on-a JSR2 LDA #00 EQU ;&enext JCN2
+		#00 ;lj STA
+		&sloop ;lj LDA MAX-SHOTS EQU ;&enext JCN2
+			;li LDA ;en-on-a JSR2 LDA #00 EQU ;&enext JCN2
+			;lj LDA ;shot-on-a JSR2 LDA #00 EQU ;&snext JCN2
+			;li LDA ;en-x-a JSR2 LDA2 ;lj LDA ;shot-x-a JSR2 LDA2 SUB2 #0008 ADD2 #0010 LTH2 #00 EQU ;&snext JCN2
+			;li LDA ;en-y-a JSR2 LDA2 ;lj LDA ;shot-y-a JSR2 LDA2 SUB2 #0008 ADD2 #0010 LTH2 #00 EQU ;&snext JCN2
+			#00 ;li LDA ;en-on-a JSR2 STA
+			#00 ;lj LDA ;shot-on-a JSR2 STA
+			;score LDA2 INC2 ;score STA2
+			;sfx-hit JSR2
+			&snext ;lj LDA INC ;lj STA ;&sloop JMP2
+		&enext ;li LDA INC ;li STA ;&eloop JMP2
+	&edone
+JMP2r
+
+@collide-ship
+	;hit-timer LDA #00 NEQ ;&done JCN2
+	#00 ;li STA
+	&loop ;li LDA MAX-ENEM EQU ;&done JCN2
+		;li LDA ;en-on-a JSR2 LDA #00 EQU ;&next JCN2
+		;li LDA ;en-x-a JSR2 LDA2 ;ship-x LDA2 SUB2 #0008 ADD2 #0018 LTH2 #00 EQU ;&next JCN2
+		;li LDA ;en-y-a JSR2 LDA2 ;ship-y LDA2 SUB2 #0008 ADD2 #0010 LTH2 #00 EQU ;&next JCN2
+		#00 ;li LDA ;en-on-a JSR2 STA
+		;lives LDA #00 EQU ;&done JCN2
+		;lives LDA #01 SUB ;lives STA
+		HIT-DUR ;hit-timer STA
+		;sfx-boom JSR2
+		;&done JMP2
+		&next ;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+( ==== starfield ==== )
+@update-stars
+	( speed: 3 if defender+thrust, else 1 )
+	;ship-thrust LDA ;defender LDA AND #00 NEQ ;&fast JCN2 #0001 ;&spd JMP2
+	&fast #0003
+	&spd
+	( direction: facing right -> stars left (negative); facing left -> right )
+	;face-left LDA #00 NEQ ;&have JCN2
+		#0000 SWP2 SUB2
+	&have ;star-vx STA2
+	#00 ;li STA
+	&loop ;li LDA STARS EQU ;&done JCN2
+		;li LDA ;star-x-a JSR2 LDA2 ;star-vx LDA2 ADD2 ;li LDA ;star-x-a JSR2 STA2
+		;li LDA ;star-x-a JSR2 LDA2 #7fff GTH2 #00 EQU ;&w2 JCN2
+			;li LDA ;star-x-a JSR2 LDA2 #00f0 ADD2 ;li LDA ;star-x-a JSR2 STA2 ;&wend JMP2
+		&w2 ;li LDA ;star-x-a JSR2 LDA2 #00ef GTH2 #00 EQU ;&wend JCN2
+			;li LDA ;star-x-a JSR2 LDA2 #00f0 SUB2 ;li LDA ;star-x-a JSR2 STA2
+		&wend
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+( ==== drawing ==== )
+@draw-scene
+	;clear-screen JSR2
+	;draw-stars JSR2
+	;draw-enemies JSR2
+	;draw-shots JSR2
+	;draw-ship JSR2
+	;draw-hud JSR2
+JMP2r
+
+@clear-screen
+	#0000 .Screen/x DEO2 #0000 .Screen/y DEO2 #80 .Screen/pixel DEO
+JMP2r
+
+@draw-stars
+	#00 ;li STA
+	&loop ;li LDA STARS EQU ;&done JCN2
+		;li LDA ;star-x-a JSR2 LDA2 .Screen/x DEO2
+		;li LDA ;star-y-a JSR2 LDA #00 SWP .Screen/y DEO2
+		;li LDA #01 AND #01 ADD .Screen/pixel DEO
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@draw-shots
+	#00 ;li STA
+	&loop ;li LDA MAX-SHOTS EQU ;&done JCN2
+		;li LDA ;shot-on-a JSR2 LDA #00 EQU ;&next JCN2
+		;li LDA ;shot-x-a JSR2 LDA2 .Screen/x DEO2
+		;li LDA ;shot-y-a JSR2 LDA2 .Screen/y DEO2
+		;shot .Screen/addr DEO2 INK-SHOT .Screen/sprite DEO
+		&next ;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@draw-enemies
+	#00 ;li STA
+	&loop ;li LDA MAX-ENEM EQU ;&done JCN2
+		;li LDA ;en-on-a JSR2 LDA #00 EQU ;&next JCN2
+		;li LDA ;en-x-a JSR2 LDA2 .Screen/x DEO2
+		;li LDA ;en-y-a JSR2 LDA2 .Screen/y DEO2
+		;li LDA ;en-type-a JSR2 LDA #01 EQU ;&t1 JCN2
+		( type 2: colour-animated diamond )
+			;en2a .Screen/addr DEO2
+			;frame LDA2 NIP #08 AND #00 EQU ;&t2a JCN2 #0f ;&t2d JMP2
+			&t2a #0a
+			&t2d .Screen/sprite DEO
+			;&next JMP2
+		&t1 ( type 1: frame-animated, flipped to travel direction )
+			;frame LDA2 NIP #08 AND #00 EQU ;&t1a JCN2 ;en1b ;&t1d JMP2
+			&t1a ;en1a
+			&t1d .Screen/addr DEO2
+			;li LDA ;en-flip-a JSR2 LDA INK-EN1 ORA .Screen/sprite DEO
+		&next ;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@draw-ship
+	( pick left tile -> ;tile )
+	;hit-timer LDA #00 NEQ ;&hit JCN2
+	;ship-thrust LDA #00 NEQ ;&thr JCN2
+	;ship-l ;&have JMP2
+	&thr ;shipT-l ;&have JMP2
+	&hit
+		;frame LDA2 NIP #08 AND #00 EQU ;&hit2 JCN2 ;shipH1-l ;&have JMP2
+		&hit2 ;shipH2-l
+	&have ;tile STA2
+	;face-left LDA #00 NEQ ;&left JCN2
+		( facing right )
+		;ship-x LDA2 .Screen/x DEO2 ;ship-y LDA2 .Screen/y DEO2
+		;tile LDA2 .Screen/addr DEO2 INK-SHIP .Screen/sprite DEO
+		;ship-x LDA2 #0008 ADD2 .Screen/x DEO2
+		;tile LDA2 #0008 ADD2 .Screen/addr DEO2 INK-SHIP .Screen/sprite DEO
+		JMP2r
+	&left
+		( facing left: mirror both tiles )
+		;ship-x LDA2 .Screen/x DEO2 ;ship-y LDA2 .Screen/y DEO2
+		;tile LDA2 #0008 ADD2 .Screen/addr DEO2 INK-SHIP #10 ORA .Screen/sprite DEO
+		;ship-x LDA2 #0008 ADD2 .Screen/x DEO2
+		;tile LDA2 .Screen/addr DEO2 INK-SHIP #10 ORA .Screen/sprite DEO
+JMP2r
+
+@draw-hud
+	;s-score #0004 #0002 ;draw-str JSR2
+	;score LDA2 #0030 #0002 ;draw-number JSR2
+	;defender LDA #00 EQU ;&nodef JCN2
+		;s-def #0058 #0002 ;draw-str JSR2
+	&nodef
+	;draw-lives JSR2
+JMP2r
+
+@draw-lives
+	#00 ;li STA
+	&loop ;li LDA #04 EQU ;&done JCN2
+		;li LDA #0a MUL #00 SWP #00c6 ADD2 .Screen/x DEO2
+		#0002 .Screen/y DEO2
+		;li LDA ;lives LDA LTH ;&full JCN2
+			;blk-line .Screen/addr DEO2 #05 ;&drw JMP2
+		&full
+			;blk-full .Screen/addr DEO2 #0a
+		&drw .Screen/sprite DEO
+		;li LDA INC ;li STA ;&loop JMP2
+	&done
+JMP2r
+
+@draw-title
+	;clear-screen JSR2
+	;s-def    #0058 #0030 ;draw-str JSR2
+	;s-start  #0028 #0050 ;draw-str JSR2
+JMP2r
+
+@draw-over
+	;s-go    #0054 #0030 ;draw-str JSR2
+	;s-press #0048 #0048 ;draw-str JSR2
+JMP2r
+
+( ==== text ==== )
+@draw-str ( str* x* y* -- )
+	;str-y STA2 ;str-x STA2 ;str-p STA2
+	&loop
+		;str-p LDA2 LDA DUP #00 EQU ;&done JCN2
+		;draw-char JSR2
+		;str-p LDA2 INC2 ;str-p STA2
+		;&loop JMP2
+	&done POP
+JMP2r
+
+@draw-char ( char -- )
+	;char-to-idx JSR2
+	#00 SWP DUP2 ADD2 DUP2 ADD2 DUP2 ADD2   ( idx*8 )
+	;font ADD2 .Screen/addr DEO2
+	;str-x LDA2 .Screen/x DEO2
+	;str-y LDA2 .Screen/y DEO2
+	#05 .Screen/sprite DEO
+	;str-x LDA2 #0008 ADD2 ;str-x STA2
+JMP2r
+
+@char-to-idx ( c -- idx )
+	DUP #20 EQU ;&spc JCN2
+	DUP #30 LTH ;&other JCN2
+	DUP #3a LTH ;&digit JCN2
+	DUP #41 LTH ;&other JCN2
+	DUP #5b LTH ;&letter JCN2
+	;&other JMP2
+	&digit  #30 SUB JMP2r
+	&letter #41 SUB #0a ADD JMP2r
+	&spc    POP #24 JMP2r
+	&other  POP #24
+JMP2r
+
+@draw-number ( val* x* y* -- )
+	;str-y STA2 ;str-x STA2 ;num-v STA2
+	;num-v LDA2 #0064 DIV2 ;draw-digit JSR2
+	;num-v LDA2 #000a DIV2 ;draw-digit JSR2
+	;num-v LDA2 ;draw-digit JSR2
+JMP2r
+
+@draw-digit ( n* -- )
+	DUP2 #000a DIV2 #000a MUL2 SUB2   ( n mod 10 )
+	NIP #30 ADD
+	;draw-char JSR2
+JMP2r
+
+( ==== rng (lcg) ==== )
+@rnd ( -- byte )
+	;seed LDA2 #ad4d MUL2 #4271 ADD2 DUP2 ;seed STA2
+	#08 SFT2 NIP
+JMP2r
+
+( ==== sound effects (single-cycle waveforms on Audio0/Audio1) ==== )
+( fire = two voices mixed: white noise (Audio0) + saw (Audio1), tuned in sndtest )
+@sfx-fire ( -- )
+	;noise    .Audio0/addr DEO2     ( WAVE=4 noise )
+	#0200     .Audio0/length DEO2
+	#4002     .Audio0/adsr DEO2      ( A4 D0 S0 R2 )
+	#44       .Audio0/volume DEO
+	#6b       .Audio0/pitch DEO
+	;wave-saw .Audio1/addr DEO2      ( WAVE=2 saw )
+	#0020     .Audio1/length DEO2    ( <=0x100 -> single-cycle, pitched )
+	#2130     .Audio1/adsr DEO2      ( A2 D1 S3 R0 )
+	#33       .Audio1/volume DEO
+	#54       .Audio1/pitch DEO
+JMP2r
+
+@sfx-hit ( -- )    ( enemy destroyed: white-noise impact, channel 2 )
+	;noise .Audio2/addr DEO2
+	#0200  .Audio2/length DEO2      ( WAVE=4 noise )
+	#1223  .Audio2/adsr DEO2        ( A1 D2 S2 R3 )
+	#66    .Audio2/volume DEO
+	#46    .Audio2/pitch DEO
+JMP2r
+
+@sfx-boom ( -- )   ( ship hit: lower, heavier white-noise crash, channel 3 )
+	;noise .Audio3/addr DEO2
+	#0200  .Audio3/length DEO2      ( WAVE=4 noise )
+	#2335  .Audio3/adsr DEO2        ( A2 D3 S3 R5, longer )
+	#88    .Audio3/volume DEO
+	#20    .Audio3/pitch DEO        ( low read rate -> grave rumble )
+JMP2r
+
+( ==== array address helpers ==== )
+@shot-on-a ( i -- a* ) #00 SWP ;shot-on ADD2 JMP2r
+@shot-x-a  ( i -- a* ) #00 SWP DUP2 ADD2 ;shot-x ADD2 JMP2r
+@shot-y-a  ( i -- a* ) #00 SWP DUP2 ADD2 ;shot-y ADD2 JMP2r
+@shot-vx-a ( i -- a* ) #00 SWP DUP2 ADD2 ;shot-vx ADD2 JMP2r
+@en-on-a   ( i -- a* ) #00 SWP ;en-on ADD2 JMP2r
+@en-x-a    ( i -- a* ) #00 SWP DUP2 ADD2 ;en-x ADD2 JMP2r
+@en-y-a    ( i -- a* ) #00 SWP DUP2 ADD2 ;en-y ADD2 JMP2r
+@en-vx-a   ( i -- a* ) #00 SWP DUP2 ADD2 ;en-vx ADD2 JMP2r
+@en-type-a ( i -- a* ) #00 SWP ;en-type ADD2 JMP2r
+@en-flip-a ( i -- a* ) #00 SWP ;en-flip ADD2 JMP2r
+@star-x-a  ( i -- a* ) #00 SWP DUP2 ADD2 ;star-x ADD2 JMP2r
+@star-y-a  ( i -- a* ) #00 SWP ;star-y ADD2 JMP2r
+
+( ==== strings ==== )
+@s-score "SCORE 00
+@s-def   "DEFENDER 00
+@s-start "PRESS 20 "A 20 "TO 20 "START 00
+@s-go    "GAME 20 "OVER 00
+@s-press "PRESS 20 "A 00
+
+( ==== sprites (1bpp, 8 bytes each; left/right tiles consecutive) ==== )
+@ship-l   0000 1c07 0f1f 0703
+@ship-r   0000 00c0 f0fc e080
+@shipT-l  0000 fc07 0fdf 0703
+@shipT-r  0000 00c0 f0fc e080
+@shipH1-l 001e 3f1f 1f3f 3f0f
+@shipH1-r 0000 c0f8 f8fc f8e0
+@shipH2-l 0000 1c07 0f1f 0703
+@shipH2-r 0000 00c0 f0fc e080
+@shot     0000 0000 003c 0000
+@en1a     f0ff bcfe fcf2 6102
+@en1b     d0ff bcfe fcf2 6402
+@en2a     ff7e 247e ff3c ff18
+@en2b     ff7e 247e ff3c ff18
+@blk-full ffff ffff ffff ffff
+@blk-line ff81 8181 8181 81ff
+
+( ==== audio: saw single cycle (32 bytes <= 0x100 -> pitched) ==== )
+@wave-saw 0008 1018 2029 3139 414a 525a 626a 737b 838b 949c a4ac b4bd c5cd d5de e6ee f6ff
+
+( ==== audio: white-noise buffer (512 bytes > 0x100 -> sample mode, not a
+       pitched single cycle, so it reads as noise; 0x80 = zero crossing) ==== )
+@noise
+	e13b 032e 112a 32b5 7908 0f08 b1f7 ed4c 2e5d 3a07 f97f 21ee 232d 178a 209a f6b5
+	887f 66e8 0924 02aa 49f2 c155 1b27 fe53 266e 490d b138 489c e814 d58d 145a 8b4f
+	994f ed15 c5b2 fdae eff3 17f1 57e1 e097 8c3f 5fd5 df3d 34f8 c082 62b0 3750 894f
+	a5e4 2428 ca6d 1892 1370 2ca2 9ceb 2183 25da 6733 cb63 eb78 b869 d759 689a 1eb4
+	4eff f1aa 4743 1854 4a23 a657 001f 2c4b 6f14 ddc8 a66a c38f 9bd8 a34d 2f85 8ed2
+	cc8d 3ac0 8c6d 98cb 1ab2 e177 fb54 c29d 0125 f5ca 98db f55f cdf4 5090 bdb1 6956
+	eaf2 0eef 350d bbf3 2147 a9b2 9498 a996 638e 2568 adab a4ea 882b 3d7d 83be 460e
+	ca13 166a 4fa0 b5de 239c 85f8 70b2 2a09 a975 53f4 ff47 224a 7c54 c9a7 42e4 14be
+	23bc d116 24a0 7465 b1c2 fc1a 0fe5 2996 daae 4bf8 7b0f b6be d459 2609 6c64 4843
+	8219 efb9 be93 cbd0 bc77 9204 a088 3d12 6fbd 5ea4 95b9 8b5a e956 01d1 7a62 e38b
+	59b5 d1f8 f6f5 e3be 34cd 4136 f0f9 3143 837a 24ab c896 b5cf 60f2 eea3 e237 ed2b
+	2665 5aab 58c1 8b66 870f 50a1 3317 1c85 d9a5 ae9d de55 c0ca 0494 91a2 7f4f 63e7
+	e3d5 ac89 dec8 84fc a17e 9250 53d2 5011 77b5 69dc e30c cf23 2024 7dc3 f8c2 799a
+	a7e7 209b 0d5c 494b c0db 5a46 9a30 faab 4488 dcf1 8ea1 5521 e075 e27f 2288 4f8c
+	4ac9 6f66 4a6c afd3 00b1 6172 0809 b9e1 7905 d4d8 fed7 a97f f89c f008 0a95 3fe7
+	7dca d66b 15dc c839 d35b 5925 bc57 7520 c210 4189 0eb0 1e8c 0917 d2f6 0f93 5d76
+
+( ==== font: 37 glyphs x 8 bytes, codes 0-9, A-Z, space ==== )
+@font
+	3c24 2424 2424 3c00 ( 0 )
+	1838 1818 1818 3c00 ( 1 )
+	3c24 0c18 3020 3c00 ( 2 )
+	3c0c 1c0c 0c2c 3800 ( 3 )
+	2424 243c 0404 0400 ( 4 )
+	3c20 380c 0c2c 3800 ( 5 )
+	1c20 3824 2424 3c00 ( 6 )
+	3c0c 1818 3030 3000 ( 7 )
+	3c24 3c24 2424 3c00 ( 8 )
+	3c24 243c 0c0c 3800 ( 9 )
+	3c24 243c 2424 2400 ( A )
+	0000 0000 0000 0000 ( B )
+	3c24 2020 2024 3c00 ( C )
+	3824 2424 2424 3800 ( D )
+	3c20 3820 2020 3c00 ( E )
+	3c20 3820 2020 2000 ( F )
+	3c20 202c 2424 3c00 ( G )
+	0000 0000 0000 0000 ( H )
+	3c18 1818 1818 3c00 ( I )
+	0000 0000 0000 0000 ( J )
+	0000 0000 0000 0000 ( K )
+	2020 2020 2020 3c00 ( L )
+	243c 3c24 2424 2400 ( M )
+	2434 342c 2c24 2400 ( N )
+	3c24 2424 2424 3c00 ( O )
+	3c24 243c 2020 2000 ( P )
+	0000 0000 0000 0000 ( Q )
+	3c24 243c 3028 2400 ( R )
+	3c20 3c04 0424 3c00 ( S )
+	3c18 1818 1818 1800 ( T )
+	0000 0000 0000 0000 ( U )
+	2424 2424 2418 1800 ( V )
+	0000 0000 0000 0000 ( W )
+	2424 1818 1824 2400 ( X )
+	2424 1818 1818 1800 ( Y )
+	0000 0000 0000 0000 ( Z )
+	0000 0000 0000 0000 ( space )
+
+( ==== state / variables ==== )
+@seed $2
+@frame $2
+@state $1
+@btn-now $1 @btn-prev $1 @btn-edge $1 @extra-btn $1
+@ship-x $2 @ship-y $2 @ship-thrust $1
+@face-left $1
+@score $2 @lives $1 @hit-timer $1 @spawn-timer $1 @defender $1
+@li $1 @lj $1
+@tile $2
+@str-x $2 @str-y $2 @str-p $2 @num-v $2
+@star-vx $2
+
+@shot-on  $8
+@shot-x   $10
+@shot-y   $10
+@shot-vx  $10
+
+@en-on    $8
+@en-x     $10
+@en-y     $10
+@en-vx    $10
+@en-type  $8
+@en-flip  $8
+
+@star-x   $30
+@star-y   $18

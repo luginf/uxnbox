@@ -1,0 +1,323 @@
+( sndtest.tal -- interactive sound bench for the Defender SFX.
+
+  Tune a Varvara Audio voice by ear, then copy the values into defender.tal.
+
+    Up / Down    : select a field
+    Left / Right : change the selected field (auto-plays)
+    A (LeftCtrl) : play the current sound
+    B (LeftAlt)  : print  PITCH= ADSR= VOL= WAVE=  to the terminal (uxn2 console)
+
+  Fields: WAVE (sine/square/saw/tri/noise), PITCH (0..107), the four ADSR
+  nibbles (ATK DEC SUS REL -- remember REL must be > 0 or the sound never ends),
+  and VOL (0..15, written to both stereo nibbles). The bottom line shows the
+  raw hex you would write to the audio ports. )
+
+( ==== devices ==== )
+|00 @System  &vector $2 &expansion $2 &wst $1 &rst $1 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
+|10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
+|20 @Screen  &vector $2 &width $2 &height $2 &auto $1 &pad $1 &x $2 &y $2 &addr $2 &pixel $1 &sprite $1
+|30 @Audio0  &vector $2 &position $2 &output $1 &pad $3 &adsr $2 &length $2 &addr $2 &volume $1 &pitch $1
+|80 @Controller &vector $2 &button $1 &key $1
+
+( ==== reset ==== )
+|0100 @reset
+	#1f4f .System/r DEO2
+	#2fd8 .System/g DEO2
+	#3f52 .System/b DEO2
+	#00f0 .Screen/width DEO2
+	#00a0 .Screen/height DEO2
+	#01 ;p-wave STA  #3c ;p-pitch STA
+	#00 ;p-atk STA   #04 ;p-dec STA  #04 ;p-sus STA  #04 ;p-rel STA
+	#0f ;p-vol STA   #00 ;sel STA
+	;draw JSR2
+	;on-frame .Screen/vector DEO2
+BRK
+
+( ==== frame loop ==== )
+@on-frame
+	;frame LDA2 INC2 ;frame STA2
+	.Controller/button DEI ;btn-now STA
+	;btn-now LDA ;btn-prev LDA #ff EOR AND ;btn-edge STA
+	;btn-now LDA ;btn-prev STA
+	( select : Up/Down on edge -- the fields are a vertical list )
+	;btn-edge LDA #10 AND #00 EQU ;&nU JCN2 ;sel-dec JSR2 &nU
+	;btn-edge LDA #20 AND #00 EQU ;&nD JCN2 ;sel-inc JSR2 &nD
+	( play / print )
+	;btn-edge LDA #01 AND #00 EQU ;&nA JCN2 ;play JSR2 &nA
+	;btn-edge LDA #02 AND #00 EQU ;&nB JCN2 ;print-params JSR2 &nB
+	( value : Left/Right on edge or every 8th held frame, auto-play )
+	;btn-now LDA #80 AND #00 EQU ;&nR JCN2
+		;btn-edge LDA #80 AND  ;frame LDA2 NIP #07 AND #00 EQU  ORA #00 NEQ ;&doR JCN2 ;&nR JMP2
+		&doR ;val-inc JSR2 ;play JSR2
+	&nR
+	;btn-now LDA #40 AND #00 EQU ;&nL JCN2
+		;btn-edge LDA #40 AND  ;frame LDA2 NIP #07 AND #00 EQU  ORA #00 NEQ ;&doL JCN2 ;&nL JMP2
+		&doL ;val-dec JSR2 ;play JSR2
+	&nL
+	;draw JSR2
+BRK
+
+( ==== selection ==== )
+@sel-inc ;sel LDA #06 LTH ;&ok JCN2 JMP2r &ok ;sel LDA INC ;sel STA JMP2r
+@sel-dec ;sel LDA #00 NEQ ;&ok JCN2 JMP2r &ok ;sel LDA #01 SUB ;sel STA JMP2r
+
+( map the selected field to its variable (-> cur-addr) and its max value )
+@set-cur ( -- max )
+	;sel LDA #00 EQU ;&w JCN2
+	;sel LDA #01 EQU ;&p JCN2
+	;sel LDA #02 EQU ;&a JCN2
+	;sel LDA #03 EQU ;&d JCN2
+	;sel LDA #04 EQU ;&s JCN2
+	;sel LDA #05 EQU ;&r JCN2
+	;p-vol   ;cur-addr STA2 #0f JMP2r
+	&w ;p-wave  ;cur-addr STA2 #04 JMP2r
+	&p ;p-pitch ;cur-addr STA2 #6b JMP2r
+	&a ;p-atk   ;cur-addr STA2 #0f JMP2r
+	&d ;p-dec   ;cur-addr STA2 #0f JMP2r
+	&s ;p-sus   ;cur-addr STA2 #0f JMP2r
+	&r ;p-rel   ;cur-addr STA2 #0f
+JMP2r
+
+@val-inc
+	;set-cur JSR2            ( max )
+	;cur-addr LDA2 LDA       ( max val )
+	DUP ROT                  ( val val max )
+	LTH ;&up JCN2
+		;cur-addr LDA2 STA JMP2r
+	&up INC ;cur-addr LDA2 STA
+JMP2r
+
+@val-dec
+	;set-cur JSR2 POP
+	;cur-addr LDA2 LDA       ( val )
+	DUP #00 NEQ ;&dn JCN2
+		;cur-addr LDA2 STA JMP2r
+	&dn #01 SUB ;cur-addr LDA2 STA
+JMP2r
+
+( ==== play current voice on Audio0 ==== )
+@play
+	;p-wave LDA #00 EQU ;&w0 JCN2
+	;p-wave LDA #01 EQU ;&w1 JCN2
+	;p-wave LDA #02 EQU ;&w2 JCN2
+	;p-wave LDA #03 EQU ;&w3 JCN2
+	;wave-noise .Audio0/addr DEO2 #0200 .Audio0/length DEO2 ;&wd JMP2
+	&w0 ;wave-sine .Audio0/addr DEO2 #0020 .Audio0/length DEO2 ;&wd JMP2
+	&w1 ;wave-sqr  .Audio0/addr DEO2 #0020 .Audio0/length DEO2 ;&wd JMP2
+	&w2 ;wave-saw  .Audio0/addr DEO2 #0020 .Audio0/length DEO2 ;&wd JMP2
+	&w3 ;wave-tri  .Audio0/addr DEO2 #0020 .Audio0/length DEO2
+	&wd
+	#00 ;p-atk LDA #1000 MUL2
+	#00 ;p-dec LDA #0100 MUL2 ADD2
+	#00 ;p-sus LDA #0010 MUL2 ADD2
+	#00 ;p-rel LDA ADD2
+	.Audio0/adsr DEO2
+	;p-vol LDA #11 MUL .Audio0/volume DEO
+	;p-pitch LDA .Audio0/pitch DEO
+JMP2r
+
+( ==== console print ==== )
+@emit ( c -- ) .Console/write DEO JMP2r
+@emit-nib ( n -- ) DUP #0a LTH ;&d JCN2 #0a SUB #41 ADD ;emit JSR2 JMP2r &d #30 ADD ;emit JSR2 JMP2r
+@emit-hexb ( b -- ) DUP #04 SFT ;emit-nib JSR2 #0f AND ;emit-nib JSR2 JMP2r
+@emit-str ( ptr* -- )
+	&loop DUP2 LDA #00 EQU ;&done JCN2 DUP2 LDA ;emit JSR2 INC2 ;&loop JMP2 &done POP2 JMP2r
+
+@print-params
+	;c-pitch ;emit-str JSR2 ;p-pitch LDA ;emit-hexb JSR2
+	;c-adsr  ;emit-str JSR2
+		;p-atk LDA #40 SFT ;p-dec LDA ORA ;emit-hexb JSR2
+		;p-sus LDA #40 SFT ;p-rel LDA ORA ;emit-hexb JSR2
+	;c-vol   ;emit-str JSR2 ;p-vol LDA #11 MUL ;emit-hexb JSR2
+	;c-wave  ;emit-str JSR2 ;p-wave LDA #30 ADD ;emit JSR2
+	#0a ;emit JSR2
+JMP2r
+
+( ==== drawing ==== )
+@draw
+	;clear-screen JSR2
+	;s-title #0050 #0006 ;draw-str JSR2
+	;s-hint  #0010 #0012 ;draw-str JSR2
+	;draw-marker JSR2
+	;s-wave  #0010 #0024 ;draw-str JSR2  ;draw-wavename JSR2
+	;s-pitch #0010 #0030 ;draw-str JSR2  ;p-pitch LDA #00 SWP #0058 #0030 ;draw-number JSR2
+	;s-atk   #0010 #003c ;draw-str JSR2  ;p-atk LDA #00 SWP #0058 #003c ;draw-number JSR2
+	;s-dec   #0010 #0048 ;draw-str JSR2  ;p-dec LDA #00 SWP #0058 #0048 ;draw-number JSR2
+	;s-sus   #0010 #0054 ;draw-str JSR2  ;p-sus LDA #00 SWP #0058 #0054 ;draw-number JSR2
+	;s-rel   #0010 #0060 ;draw-str JSR2  ;p-rel LDA #00 SWP #0058 #0060 ;draw-number JSR2
+	;s-vol   #0010 #006c ;draw-str JSR2  ;p-vol LDA #00 SWP #0058 #006c ;draw-number JSR2
+	;draw-hexline JSR2
+JMP2r
+
+@draw-marker
+	#0006 .Screen/x DEO2
+	;sel LDA #0c MUL #00 SWP #0024 ADD2 .Screen/y DEO2
+	;cur .Screen/addr DEO2 #03 .Screen/sprite DEO
+JMP2r
+
+@draw-wavename
+	;p-wave LDA #00 EQU ;&s0 JCN2
+	;p-wave LDA #01 EQU ;&s1 JCN2
+	;p-wave LDA #02 EQU ;&s2 JCN2
+	;p-wave LDA #03 EQU ;&s3 JCN2
+	;n-noise #0058 #0024 ;draw-str JSR2 JMP2r
+	&s0 ;n-sine #0058 #0024 ;draw-str JSR2 JMP2r
+	&s1 ;n-sqr  #0058 #0024 ;draw-str JSR2 JMP2r
+	&s2 ;n-saw  #0058 #0024 ;draw-str JSR2 JMP2r
+	&s3 ;n-tri  #0058 #0024 ;draw-str JSR2
+JMP2r
+
+@draw-hexline
+	#0010 ;str-x STA2 #0080 ;str-y STA2
+	#50 ;draw-char JSR2  ;p-pitch LDA ;draw-hexb JSR2
+	#20 ;draw-char JSR2
+	#41 ;draw-char JSR2
+	;p-atk LDA #40 SFT ;p-dec LDA ORA ;draw-hexb JSR2
+	;p-sus LDA #40 SFT ;p-rel LDA ORA ;draw-hexb JSR2
+	#20 ;draw-char JSR2
+	#56 ;draw-char JSR2  ;p-vol LDA #11 MUL ;draw-hexb JSR2
+JMP2r
+
+@clear-screen
+	#0000 .Screen/x DEO2 #0000 .Screen/y DEO2 #80 .Screen/pixel DEO
+JMP2r
+
+( ==== text ==== )
+@draw-str ( str* x* y* -- )
+	;str-y STA2 ;str-x STA2 ;str-p STA2
+	&loop
+		;str-p LDA2 LDA DUP #00 EQU ;&done JCN2
+		;draw-char JSR2
+		;str-p LDA2 INC2 ;str-p STA2
+		;&loop JMP2
+	&done POP
+JMP2r
+
+@draw-char ( char -- ) ;char-to-idx JSR2 ;draw-glyph JSR2 JMP2r
+
+@draw-glyph ( idx -- )
+	#00 SWP DUP2 ADD2 DUP2 ADD2 DUP2 ADD2   ( idx*8 )
+	;font ADD2 .Screen/addr DEO2
+	;str-x LDA2 .Screen/x DEO2
+	;str-y LDA2 .Screen/y DEO2
+	#05 .Screen/sprite DEO
+	;str-x LDA2 #0008 ADD2 ;str-x STA2
+JMP2r
+
+@draw-hexb ( b -- ) DUP #04 SFT ;draw-glyph JSR2 #0f AND ;draw-glyph JSR2 JMP2r
+
+@char-to-idx ( c -- idx )
+	DUP #20 EQU ;&spc JCN2
+	DUP #30 LTH ;&other JCN2
+	DUP #3a LTH ;&digit JCN2
+	DUP #41 LTH ;&other JCN2
+	DUP #5b LTH ;&letter JCN2
+	;&other JMP2
+	&digit  #30 SUB JMP2r
+	&letter #41 SUB #0a ADD JMP2r
+	&spc    POP #24 JMP2r
+	&other  POP #24
+JMP2r
+
+@draw-number ( val* x* y* -- )
+	;str-y STA2 ;str-x STA2 ;num-v STA2
+	;num-v LDA2 #0064 DIV2 ;draw-digit JSR2
+	;num-v LDA2 #000a DIV2 ;draw-digit JSR2
+	;num-v LDA2 ;draw-digit JSR2
+JMP2r
+
+@draw-digit ( n* -- )
+	DUP2 #000a DIV2 #000a MUL2 SUB2 NIP #30 ADD ;draw-char JSR2
+JMP2r
+
+( ==== strings ==== )
+@s-title "SOUND 20 "TEST 00
+@s-hint  "ARROWS 20 "EDIT 20 "A 20 "PLAY 20 "B 20 "PRINT 00
+@s-wave  "WAVE 00
+@s-pitch "PITCH 00
+@s-atk   "ATK 00
+@s-dec   "DEC 00
+@s-sus   "SUS 00
+@s-rel   "REL 00
+@s-vol   "VOL 00
+@n-sine  "SINE 00
+@n-sqr   "SQUARE 00
+@n-saw   "SAW 00
+@n-tri   "TRI 00
+@n-noise "NOISE 00
+@c-pitch "PITCH= 00
+@c-adsr  20 "ADSR= 00
+@c-vol   20 "VOL= 00
+@c-wave  20 "WAVE= 00
+
+( ==== sprites / font ==== )
+@cur ffff ffff ffff ffff
+@font
+	3c24 2424 2424 3c00 ( 0 )
+	1838 1818 1818 3c00 ( 1 )
+	3c24 0c18 3020 3c00 ( 2 )
+	3c0c 1c0c 0c2c 3800 ( 3 )
+	2424 243c 0404 0400 ( 4 )
+	3c20 380c 0c2c 3800 ( 5 )
+	1c20 3824 2424 3c00 ( 6 )
+	3c0c 1818 3030 3000 ( 7 )
+	3c24 3c24 2424 3c00 ( 8 )
+	3c24 243c 0c0c 3800 ( 9 )
+	3c24 243c 2424 2400 ( A )
+	3838 3c24 2424 3c00 ( B )
+	3c24 2020 2024 3c00 ( C )
+	3824 2424 2424 3800 ( D )
+	3c20 3820 2020 3c00 ( E )
+	3c20 3820 2020 2000 ( F )
+	3c20 202c 2424 3c00 ( G )
+	2424 243c 2424 2400 ( H )
+	3c18 1818 1818 3c00 ( I )
+	0404 0404 2424 3c00 ( J )
+	2428 3030 2824 2400 ( K )
+	2020 2020 2020 3c00 ( L )
+	243c 3c24 2424 2400 ( M )
+	2434 342c 2c24 2400 ( N )
+	3c24 2424 2424 3c00 ( O )
+	3c24 243c 2020 2000 ( P )
+	3c24 2424 2c28 3400 ( Q )
+	3c24 243c 3028 2400 ( R )
+	3c20 3c04 0424 3c00 ( S )
+	3c18 1818 1818 1800 ( T )
+	2424 2424 2424 3c00 ( U )
+	2424 2424 2418 1800 ( V )
+	2424 2424 3c3c 2400 ( W )
+	2424 1818 1824 2400 ( X )
+	2424 1818 1818 1800 ( Y )
+	3c04 0818 2020 3c00 ( Z )
+	0000 0000 0000 0000 ( space )
+
+( ==== audio waveforms ==== )
+@wave-sine 8098 b0c6 d9e9 f5fc fffc f5e9 d9c6 b098 8067 4f39 2616 0a03 0103 0a16 2639 4f67
+@wave-sqr  0000 0000 0000 0000 0000 0000 0000 0000 ffff ffff ffff ffff ffff ffff ffff ffff
+@wave-saw  0008 1018 2029 3139 414a 525a 626a 737b 838b 949c a4ac b4bd c5cd d5de e6ee f6ff
+@wave-tri  000f 1f2f 3f4f 5f6f 7f8f 9faf bfcf dfef ffef dfcf bfaf 9f8f 7f6f 5f4f 3f2f 1f0f
+@wave-noise
+	a54d ca18 2530 bb1d 6d13 2cde d623 7b2e d91e 3f72 1fcb 1971 1744 94d6 493c 9d5c
+	3460 be31 201e 69fe daa0 eee8 b999 7f5c 7c29 99fd afe5 9325 3cd6 54af 4dfa d714
+	27a0 aeb3 fee9 232f 8af2 211f 9ee4 91c5 b10b ecb5 563b fc1e 6f93 427e cbc8 fe29
+	55e5 cd8e 46dc 8ed4 b7c2 764d 2a5a 4d76 7706 f85d 8690 024a d6bd a340 1be9 c8cb
+	ccc9 35f6 cd1f 6122 6ae1 5338 ae1a 3400 4d33 ba0d 246a c04c 81b1 baf2 3e3b f9ee
+	f5f7 9f2b 4934 af87 f552 0b69 b94b 0d98 2e85 bb55 b672 a872 637a cd74 66fc b60e
+	0e8f f184 63b0 e4b2 ba29 7034 74f0 64ac 68f7 00f5 b02b 3dc6 66f4 5bde aa2c caed
+	cd2b 5157 410e 4dee 4af2 b34f 430a 0734 47de 636c 0e80 6c95 7ba6 84d6 431f b5ea
+	d742 4d09 e15d 024c 5848 f23d 1fa6 f736 1d7f 618d 1532 e70e 20e2 a666 8de7 f47e
+	8467 e546 d53e c8e2 a125 7bdb 256c 9b3e 4fbb 4981 46ef 7030 cbf9 5372 52dc cead
+	d764 b6a3 2fbb 09ad eae1 09c4 a997 2039 7535 2b87 8b14 5c8a 42d8 84cf 4cfd a72d
+	8e1d 5dd9 2589 082d 852a 7122 873e e805 add5 8942 167a 3852 8619 5c67 9f9c 6994
+	e45b 8ab1 0980 1207 0961 f37d e436 ddfd c99d 6e75 af65 47cf b11b 4207 2482 dc53
+	1c2b c390 7c96 17eb 5e50 89e4 0186 baa8 a57d 119e 6fb6 5d00 abc3 2af3 8e66 7f02
+	2e87 2d49 cc15 c90b 999b 772b 4fc7 a6fd 4c91 4a16 db47 0875 2b0f 1544 b835 c0e7
+	1909 7dfa 8701 e923 2f21 f281 2687 7869 76eb fcc3 27f5 9317 6527 4ba9 829b 4406
+
+( ==== variables ==== )
+@frame $2
+@btn-now $1 @btn-prev $1 @btn-edge $1
+@sel $1
+@p-wave $1 @p-pitch $1 @p-atk $1 @p-dec $1 @p-sus $1 @p-rel $1 @p-vol $1
+@cur-addr $2
+@str-x $2 @str-y $2 @str-p $2 @num-v $2
