@@ -4,6 +4,8 @@ A uxn/varvara virtual machine for the Atari ST, written in C and cross-compiled 
 
 `UXN.PRG` is included, ready to copy to a floppy image or a hard disk.
 
+![Noodle running under uxntari, in Hatari](screenshot.png)
+
 ## Build
 
     make               # builds UXN.PRG
