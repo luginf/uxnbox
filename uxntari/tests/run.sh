@@ -35,6 +35,11 @@ check console "$(printf ghi | "$H" "$W/console.rom" abc def 2>&1)"
 uxnasm "$UXN11/etc/tests/file.tal" "$W/file.rom" >/dev/null
 mkdir "$W/files" && (cd "$W/files" && check file "$("$H" -n "$W/file.rom" 2>&1)")
 
+# expansion : remplissage et copie entre banques, banque 1 chargee depuis la fin de la ROM
+uxnasm "$HERE/expansion.tal" "$W/exp.rom" >/dev/null
+python3 -I -c "import sys; b=open(sys.argv[1],'rb').read(); open(sys.argv[1],'wb').write(b+bytes(0xff00-len(b))+b'QRST')" "$W/exp.rom"
+if [ "$("$H" -n "$W/exp.rom" 2>&1)" = Qz ]; then echo "ok    expansion (banques)"; else echo "ECHEC expansion"; fails=$((fails+1)); fi
+
 for t in screen screen.auto screen.bounds screen.pixel; do
     uxnasm "$UXN11/etc/tests/$t.tal" "$W/$t.rom" >/dev/null
     "$H" -n -f 3 -d "$W/$t.mine" "$W/$t.rom" >/dev/null 2>"$W/err" || true

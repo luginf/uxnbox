@@ -1,0 +1,19 @@
+|00 @System &vector $2 &expansion $2 &wst $1 &rst $1 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
+|10 @Console &vector $2 &read $1 &pad $4 &type $1 &write $1 &error $1
+|0100
+	( fill bank 2 addr 0x0010 len 4 with 'z' )
+	;fill .System/expansion DEO2
+	( copy from bank 1 addr 0 len 4 to bank 0 addr buf : donnees de la ROM apres 0xff00 )
+	;cp1 .System/expansion DEO2
+	( copy from bank 2 addr 0x10 len 4 to bank 0 buf2 )
+	;cp2 .System/expansion DEO2
+	;buf LDA .Console/write DEO
+	;buf2 LDA .Console/write DEO
+	#0a .Console/write DEO
+	#010f .System/state DEO
+BRK
+@fill 00 0004 0002 0010 7a
+@cp1 01 0004 0001 0000 0000 =buf
+@cp2 01 0004 0002 0010 0000 =buf2
+@buf $4
+@buf2 $4

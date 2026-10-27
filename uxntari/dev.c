@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <time.h>
 #include "dev.h"
@@ -62,24 +64,47 @@ system_print(const char *name, int r)
 	on_stderr(10);
 }
 
-/* Remplissage et copie dans la memoire (banque 0 seulement) */
+/* Banques d'expansion : la banque 0 est ram, les autres sont allouees a la demande */
+#define BANKS 16
+static u8 *banks[BANKS];
+
+static u8 *
+bank_mem(unsigned b)
+{
+	if(b >= BANKS) return NULL;
+	if(b == 0) return ram;
+	if(!banks[b]) banks[b] = (u8 *)calloc(0x10000, 1);
+	return banks[b];
+}
+
+static void
+banks_free(void)
+{
+	int i;
+	for(i = 1; i < BANKS; i++) {
+		free(banks[i]);
+		banks[i] = NULL;
+	}
+}
+
+/* Remplissage et copie dans la memoire (toutes les banques) */
 static void
 system_expansion(void)
 {
-	int ex = get_d2(2), cmd = ram[ex], length = peek2(ex + 1), bank = peek2(ex + 3), addr = peek2(ex + 5), i;
+	int ex = get_d2(2), cmd = ram[ex], length = peek2(ex + 1), addr = peek2(ex + 5);
+	unsigned bank = peek2(ex + 3);
+	u8 *src, *dst;
 	if(length > 0x10000 - addr) length = 0x10000 - addr;
 	if(cmd == 0) {
-		if(bank == 0)
-			for(i = 0; i < length; i++) ram[addr + i] = ram[(ex + 7) & 0xffff];
+		if((dst = bank_mem(bank)) != NULL)
+			memset(dst + addr, ram[(ex + 7) & 0xffff], length);
 	} else if(cmd == 1 || cmd == 2) {
-		int dbank = peek2(ex + 7), daddr = peek2(ex + 9);
+		unsigned dbank = peek2(ex + 7);
+		int daddr = peek2(ex + 9);
 		if(length > 0x10000 - daddr) length = 0x10000 - daddr;
-		if(bank == 0 && dbank == 0) {
-			if(daddr > addr)
-				for(i = length - 1; i >= 0; i--) ram[daddr + i] = ram[addr + i];
-			else
-				for(i = 0; i < length; i++) ram[daddr + i] = ram[addr + i];
-		}
+		src = bank_mem(bank);
+		dst = bank_mem(dbank);
+		if(src && dst) memmove(dst + daddr, src + addr, length);
 	} else {
 		err_str("Unknown command: ");
 		err_hex(cmd);
@@ -247,13 +272,20 @@ deo(u8 port)
 
 /* ---- Demarrage ---- */
 
-/* Charge la ROM en $100, 65280 octets au plus */
+/* Charge la ROM en $100 (65280 octets), puis la suite dans les banques d'expansion */
 int
 dev_load(const char *path)
 {
 	FILE *f = fopen(path, "rb");
+	unsigned b;
+	u8 *m;
 	if(!f) return 0;
-	if(fread(ram + 0x100, 1, 0x10000 - 0x100, f) == 0) { fclose(f); return 1; }
+	banks_free();
+	if(fread(ram + 0x100, 1, 0x10000 - 0x100, f) == 0xff00)
+		for(b = 1; b < BANKS; b++) {
+			if(!(m = bank_mem(b))) break;
+			if(fread(m, 1, 0x10000, f) < 0x10000) break;
+		}
 	fclose(f);
 	return 1;
 }
@@ -279,6 +311,7 @@ dev_boot(int has_args)
 void
 dev_shutdown(void)
 {
+	banks_free();
 	file_reset(0);
 	file_reset(1);
 }

@@ -28,7 +28,7 @@ Copy `UXN.PRG` and some `.rom` files to the same directory (or floppy). Without 
 | Device     | State |
 |------------|-------|
 | core       | complete, passes the official opctest |
-| system     | colors, halt, debug, expansion (fill/copy in bank 0 only) |
+| system     | colors, halt, debug, expansion (fill/copy, 16 banks of 64K allocated on demand, loaded from the end of the ROM) |
 | console    | output, error, debug, arguments |
 | screen     | pixel, fill, 1bpp and 2bpp sprites, layers, auto, resize (up to the hardware size) |
 | controller | arrows, Home and Control/Alt/Shift (A, B, Select), typed keys |
@@ -40,7 +40,7 @@ Copy `UXN.PRG` and some `.rom` files to the same directory (or floppy). Without 
 ## Limits
 
 - The ST keyboard does not report key releases: an arrow is considered released a few frames after its last repeat.
-- Only one memory bank (64K) exists: expansion commands on other banks are ignored. The console cannot start child processes.
+- Expansion banks use ST memory (64K each, only when used). The console cannot start child processes.
 - The ST has no sample playback. A note (sample of 256 bytes or less) is played as a square wave on the YM2149 at the right pitch, a longer sample (drums, voice) as a burst of noise with the right volume envelope. Voice 4 only sounds when voice 3 is idle. The timbre is an approximation.
 - The key click and bell are turned off while UXN runs and restored on exit.
 - Checked only in Hatari with an old EmuTOS (floppy image): palette, sprites, selector, mouse, sound. Not checked: real hardware, STE/TT/Falcon, speed.
