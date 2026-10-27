@@ -7,6 +7,7 @@ Petits projets autour de la plateforme [Varvara/Uxn](https://wiki.xxiivv.com/sit
 | [`xo/`](xo/) | Morpion 3×3 et 5×5 contre l'ordinateur (Uxntal) |
 | [`defender/`](defender/) | Shoot'em up horizontal (Uxntal) |
 | [`uxntari/`](uxntari/) | Une VM uxn/varvara pour Atari ST, en C (`UXN.PRG` fourni) |
+| [`uxntracker/`](uxntracker/) | Tracker 4 voies (carré AY + instruments type SID), lit et écrit le format `.cct` de ChooChooTracker (Uxntal) |
 
 ## Outils à la racine
 

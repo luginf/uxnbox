@@ -1,0 +1,2081 @@
+( tracker.tal -- tracker 4 voies (AY / SID), format texte ChooChooTracker
+
+  4 voix = les 4 canaux Audio de Varvara. Instrument 00 : carre AY, tenu.
+  Instruments 01 a 07 : patchs SID (forme d'onde, largeur d'impulsion et sa
+  modulation, ADSR, porte, arpege). Varvara ne latche volume et hauteur qu'au
+  declenchement : l'enveloppe et la largeur d'impulsion sont donc rendues dans
+  la forme d'onde elle-meme, reecrite a chaque tick de 50 Hz.
+  Le morceau est une liste de motifs de 16 lignes x 4 voix (32 motifs max).
+  Fichier .cct au format ChooChooTracker 11.0. Voir README.md. )
+
+( ==== devices ==== )
+|00 @System  &vector $2 &expansion $2 &wst $1 &rst $1 &metadata $2 &r $2 &g $2 &b $2 &debug $1 &state $1
+|20 @Screen  &vector $2 &width $2 &height $2 &auto $1 &pad $1 &x $2 &y $2 &addr $2 &pixel $1 &sprite $1
+|80 @Controller &vector $2 &button $1 &key $1
+|a0 @File &vector $2 &success $2 &stat $2 &delete $1 &append $1 &name $2 &length $2 &read $2 &write $2
+
+( ==== memoire de travail, apres le code ==== )
+|4000
+@pat        $1000   ( 32 motifs x 16 lignes x 4 voix x (note, instrument) ; ff = vide, fe = OFF )
+@phr        $4000   ( chargement : 512 phrases x 16 lignes x 2 octets )
+@songtmp    $80     ( chargement : 32 lignes de song x 4 chaines )
+@chainfirst $200    ( chargement : 256 chaines -> 1re phrase )
+@obuf       $100    ( tampon d'ecriture du fichier )
+@rbuf       $100    ( tampon de lecture du fichier )
+@lbuf       $c0     ( ligne en cours d'analyse )
+@fname      $14     ( nom du fichier, 0 final )
+@ins        $200    ( 8 instruments x 64 : type, 25 parametres SID, banque, nom )
+@vs         $80     ( 4 voix x 32 octets d'etat )
+@vbuf       $480    ( 4 voix x 0x120 octets de forme d'onde )
+@noisebase  $120    ( bruit de base )
+
+@len $1 @spd $1 @oct $1 @layout $1
+@cur-s $1 @cur-r $1 @cur-v $1 @cur-inst $1 @ifield $1
+@view $1 @menu $1 @msel $1 @mconf $1 @modified $1 @nlen $1
+@playing $1 @psong $1 @prow $1 @ptick $1 @tacc $1 @hl-song $1 @hl-row $1
+@dirty $1 @mode $1 @col $1 @msg $2
+@bnow $1 @bprev $1 @bedge $1 @key $1
+@cx $2 @cy $2
+@tv $1 @gr $1 @gv $1 @hlf $1 @tn2 $1 @ti2 $1
+@opos $2 @pi $1 @ss $1 @sv $1 @sr $1 @cid $2 @dn $2 @ddiv $2 @dz $1
+@pe-s $1 @pe-r $1 @pe-v $1
+@fptr $2 @fn $2 @fv $1 @cn $2 @cdst $2 @cs2 $2
+@fp-c $1 @fp-i $1
+@ph-n $2 @ls-p $2 @ls-i $1
+@lpos $1 @infence $1 @sec $1 @lrow $1 @pid $2 @gid $2 @nsong $1 @sc $1
+@rcnt $2 @ri $2 @ls $1 @lv $1 @lr $1 @lph $2 @sa $2 @dst2 $2
+@iid $1 @ikind $1 @pd-p $2 @pd-n $2 @ps-d $2 @ps-i $1
+@ii $1 @ip $2 @pj $1 @pr $2 @ij $1
+@vi $1 @vp $2 @ti $1 @tn $1
+@rd $2 @rl $1 @rt $1 @rw $1 @rn $2 @rneg $1 @rpulse $2 @rdelta $2 @rng $2 @ni $2
+@scn $1 @sca $2
+@ie-d $1 @ie-e $2 @ie-a $2 @ie-v $2 @ie-s $2
+
+( ==== reset ==== )
+|0100
+@on-reset
+	#1d4f .System/r DEO2
+	#1dbb .System/g DEO2
+	#2ef3 .System/b DEO2
+	#0180 .Screen/width DEO2
+	#00f0 .Screen/height DEO2
+	#00
+	&av
+		DUP #40 SFT #30 ADD STH
+		#0000 STHkr #08 ADD DEO2
+		#0020 STHkr #0a ADD DEO2
+		;wave-sqr STHkr #0c ADD DEO2
+		POPr
+		INC DUP #04 LTH ;&av JCN2
+	POP
+	;pat #1000 #ff ;fill JSR2
+	;s-defname ;fname #0009 ;copy JSR2
+	#08 ;nlen STA
+	;init-inst JSR2
+	;init-noise JSR2
+	#01 ;len STA
+	#06 ;spd STA
+	#04 ;oct STA
+	#ff ;hl-row STA
+	#01 ;dirty STA
+	;on-screen .Screen/vector DEO2
+	;on-controller .Controller/vector DEO2
+BRK
+
+( ==== image : 60 Hz ; le tick du tracker (voix + lecture) est a 50 Hz ==== )
+@on-screen
+	;tacc LDA #05 ADD DUP #06 LTH ;&hold JCN2
+	#06 SUB ;tacc STA ;do-tick JSR2 ;&chk JMP2
+	&hold ;tacc STA
+	&chk
+	;dirty LDA ;&paint JCN2
+BRK
+	&paint
+		#00 ;dirty STA
+		;redraw JSR2
+BRK
+
+@do-tick
+	;voices-tick JSR2
+	;playing LDA ;&pl JCN2
+JMP2r
+	&pl
+	;ptick LDA #00 NEQ ;&nt JCN2
+	;trigger-row JSR2
+	&nt
+	;ptick LDA INC DUP ;spd LDA LTH ;&same JCN2
+	POP #00 ;ptick STA ;advance-row JMP2
+	&same ;ptick STA
+JMP2r
+
+@voices-tick
+	#00
+	&l
+		DUP ;voice-tick JSR2
+		INC DUP #04 LTH ;&l JCN2
+	POP
+JMP2r
+
+@trigger-row
+	;psong LDA ;hl-song STA
+	;prow LDA ;hl-row STA
+	;psong LDA ;cur-s STA
+	#01 ;dirty STA
+	#00 ;tv STA
+	&lp
+		;psong LDA ;prow LDA ;tv LDA ;cell-addr JSR2
+		DUP2 LDA ;tn2 STA
+		INC2 LDA #07 AND ;ti2 STA
+		;tn2 LDA #ff EQU ;&nx JCN2
+		;tn2 LDA #fe EQU ;&off JCN2
+		;tv LDA ;tn2 LDA ;ti2 LDA ;trigger JSR2 ;&nx JMP2
+		&off ;tv LDA ;note-off JSR2
+		&nx
+		;tv LDA INC DUP ;tv STA #04 LTH ;&lp JCN2
+JMP2r
+
+@advance-row
+	;prow LDA INC DUP #10 LTH ;&ok JCN2
+	POP #00 ;prow STA
+	;psong LDA INC DUP ;len LDA LTH ;&ok2 JCN2
+	POP #00
+	&ok2 ;psong STA
+JMP2r
+	&ok ;prow STA
+JMP2r
+
+@play-start
+	;cur-s LDA ;psong STA
+	#00 ;prow STA
+	#00 ;ptick STA
+	#05 ;tacc STA
+	#01 ;playing STA
+	#01 ;dirty STA
+JMP2r
+
+@play-stop
+	#00 ;playing STA
+	#ff ;hl-row STA
+	#00
+	&sv
+		DUP ;note-off JSR2
+		INC DUP #04 LTH ;&sv JCN2
+	POP
+	#01 ;dirty STA
+JMP2r
+
+( ==== voix ==== )
+( v -- : selectionne la voix courante )
+@vsel
+	DUP ;vi STA
+	#00 SWP #50 SFT2 ;vs ADD2 ;vp STA2
+JMP2r
+
+( off -- addr* : champ de la voix courante. 00 ph, 01 type, 02 niveau*, 04 arate*, 06 drate*,
+  08 slvl*, 0a rrate*, 0c onde, 0d arp, 0e pulse*, 10 pdepth*, 12 prate*, 14 pacc*, 16 t*,
+  18 porte*, 1b note, 1c ap )
+@vf
+	#00 SWP ;vp LDA2 ADD2
+JMP2r
+
+( off -- port : port Audio de la voix courante )
+@vport
+	;vi LDA #40 SFT #30 ADD ADD
+JMP2r
+
+( off -- val* : parametre de l'instrument en cours de declenchement ; off = 2 + 2 * numero )
+@ipar
+	#00 SWP ;ip LDA2 ADD2 LDA2
+JMP2r
+
+( table* idx -- val* )
+@tk
+	#00 SWP DUP2 ADD2 ADD2 LDA2
+JMP2r
+
+@silence
+	#00 #0e ;vport JSR2 DEO
+	#7f #0f ;vport JSR2 DEO
+	#00 #00 ;vf JSR2 STA
+	#00 #01 ;vf JSR2 STA
+JMP2r
+
+( v -- : coupe : tout de suite pour l'AY, relachement pour un patch SID )
+@note-off
+	;vsel JSR2
+	#01 ;vf JSR2 LDA #1b EQU ;&sid JCN2
+	;silence JMP2
+	&sid #00 ;vf JSR2 LDA ;&rel JCN2
+JMP2r
+	&rel #04 #00 ;vf JSR2 STA
+JMP2r
+
+( v note inst -- )
+@trigger
+	#07 AND ;ti STA ;tn STA ;vsel JSR2
+	;ti LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+	;ip LDA2 LDA #1b EQU ;&sid JCN2
+	( carre AY, tenu )
+	#01 #01 ;vf JSR2 STA
+	#00 #00 ;vf JSR2 STA
+	;wave-sqr #0c ;vport JSR2 DEO2
+	#0020 #0a ;vport JSR2 DEO2
+	#0000 #08 ;vport JSR2 DEO2
+	#cc #0e ;vport JSR2 DEO
+	;tn LDA #0c ADD #0f ;vport JSR2 DEO
+JMP2r
+	&sid
+	#1b #01 ;vf JSR2 STA
+	;tn LDA #1b ;vf JSR2 STA
+	#04 ;ipar JSR2 NIP #0c ;vf JSR2 STA
+	#32 ;ipar JSR2 NIP DUP #04 GTH ;&a1 JCN2 ;&a2 JMP2
+	&a1 POP #04
+	&a2 #0d ;vf JSR2 STA
+	#0e ;ipar JSR2 #0e ;vf JSR2 STA2
+	#28 ;ipar JSR2 #10 ;vf JSR2 STA2
+	#2a ;ipar JSR2 #12 ;vf JSR2 STA2
+	#1e ;ipar JSR2 #18 ;vf JSR2 STA2
+	#ff00 ;atk-ticks #06 ;ipar JSR2 NIP ;tk JSR2 DIV2 #04 ;vf JSR2 STA2
+	#ff00 ;dec-ticks #08 ;ipar JSR2 NIP ;tk JSR2 DIV2 #06 ;vf JSR2 STA2
+	#0a ;ipar JSR2 #1100 MUL2 #08 ;vf JSR2 STA2
+	#ff00 ;dec-ticks #0c ;ipar JSR2 NIP ;tk JSR2 DIV2 #0a ;vf JSR2 STA2
+	#00 ;vf JSR2 LDA ;&keep JCN2
+	#0000 #02 ;vf JSR2 STA2
+	&keep
+	#01 #00 ;vf JSR2 STA
+	#0000 #14 ;vf JSR2 STA2
+	#0000 #16 ;vf JSR2 STA2
+	#00 #1c ;vf JSR2 STA
+	( tampon de cette voix, longueur : 0x40 echantillons, 0x120 pour le bruit )
+	#00 ;vi LDA #0120 MUL2 ;vbuf ADD2 #0c ;vport JSR2 DEO2
+	#0c ;vf JSR2 LDA #08 AND ;&nz JCN2
+	#0040 ;&ln JMP2
+	&nz #0120
+	&ln #0a ;vport JSR2 DEO2
+	#0000 #08 ;vport JSR2 DEO2
+	#cc #0e ;vport JSR2 DEO
+	;vi LDA ;voice-tick JSR2
+	;tn LDA #0c ADD #0f ;vport JSR2 DEO
+JMP2r
+
+( v -- : un tick de 50 Hz pour un patch SID )
+@voice-tick
+	;vsel JSR2
+	#01 ;vf JSR2 LDA #1b EQU #00 EQU ;&no JCN2
+	#00 ;vf JSR2 LDA #00 EQU ;&no JCN2
+	( t, borne )
+	#16 ;vf JSR2 LDA2 DUP2 #0fff LTH2 ;&ti JCN2 ;&tn JMP2
+	&ti INC2
+	&tn #16 ;vf JSR2 STA2
+	( porte )
+	#00 ;vf JSR2 LDA #04 LTH ;&g1 JCN2 ;&nogate JMP2
+	&g1 #18 ;vf JSR2 LDA2 #0000 EQU2 ;&nogate JCN2
+	#16 ;vf JSR2 LDA2 #18 ;vf JSR2 LDA2 LTH2 ;&nogate JCN2
+	#04 #00 ;vf JSR2 STA
+	&nogate
+	( enveloppe : 1 attaque, 2 decay, 3 sustain, 4 release )
+	#00 ;vf JSR2 LDA
+	DUP #01 EQU ;&p-atk JCN2
+	DUP #02 EQU ;&p-dec JCN2
+	DUP #03 EQU ;&p-sus JCN2
+	POP ;&p-rel JMP2
+	&p-atk POP
+		#ff00 #02 ;vf JSR2 LDA2 SUB2
+		#04 ;vf JSR2 LDA2 GTH2 ;&a1 JCN2
+		#ff00 #02 ;vf JSR2 STA2 #02 #00 ;vf JSR2 STA ;&env JMP2
+		&a1 #02 ;vf JSR2 LDA2 #04 ;vf JSR2 LDA2 ADD2 #02 ;vf JSR2 STA2 ;&env JMP2
+	&p-dec POP
+		#02 ;vf JSR2 LDA2 #08 ;vf JSR2 LDA2 SUB2
+		#06 ;vf JSR2 LDA2 GTH2 ;&d1 JCN2
+		#08 ;vf JSR2 LDA2 #02 ;vf JSR2 STA2 #03 #00 ;vf JSR2 STA ;&env JMP2
+		&d1 #02 ;vf JSR2 LDA2 #06 ;vf JSR2 LDA2 SUB2 #02 ;vf JSR2 STA2 ;&env JMP2
+	&p-sus POP
+		#08 ;vf JSR2 LDA2 #02 ;vf JSR2 STA2 ;&env JMP2
+	&p-rel
+		#02 ;vf JSR2 LDA2 #0a ;vf JSR2 LDA2 GTH2 ;&r1 JCN2
+		;silence JMP2
+		&r1 #02 ;vf JSR2 LDA2 #0a ;vf JSR2 LDA2 SUB2 #02 ;vf JSR2 STA2
+	&env
+	( phase de la modulation de largeur d'impulsion : 64 pas = 0x4000 )
+	#14 ;vf JSR2 LDA2 #12 ;vf JSR2 LDA2 #0021 MUL2 ADD2 #3fff AND2 #14 ;vf JSR2 STA2
+	;voice-render JSR2
+	( arpege )
+	#0d ;vf JSR2 LDA ;&arp JCN2
+	&no
+JMP2r
+	&arp
+	#1c ;vf JSR2 LDA INC DUP #03 LTH ;&ap1 JCN2
+	POP #00
+	&ap1 DUP #1c ;vf JSR2 STA
+	#0d ;vf JSR2 LDA #03 MUL ADD #00 SWP ;arptab ADD2 LDA
+	#1b ;vf JSR2 LDA ADD #0c ADD
+	DUP #6c LTH ;&pw JCN2
+	POP
+JMP2r
+	&pw #0f ;vport JSR2 DEO
+JMP2r
+
+( largeur d'impulsion courante -> seuil rt sur 64 )
+@calc-pw
+	#14 ;vf JSR2 LDA
+	DUP #20 LTH #00 EQU ;rneg STA
+	#1f AND #00 SWP ;sinhalf ADD2 LDA #00 SWP
+	#10 ;vf JSR2 LDA2 #03 SFT2 MUL2 #04 SFT2 ;rdelta STA2
+	#0e ;vf JSR2 LDA2 ;rpulse STA2
+	;rneg LDA ;&sub JCN2
+	;rpulse LDA2 ;rdelta LDA2 ADD2
+	DUP2 #0fff GTH2 ;&c1 JCN2 ;&st JMP2
+	&c1 POP2 #0fff ;&st JMP2
+	&sub ;rpulse LDA2 ;rdelta LDA2 GTH2 ;&ok JCN2
+	#0000 ;&st JMP2
+	&ok ;rpulse LDA2 ;rdelta LDA2 SUB2
+	&st #06 SFT2 NIP ;rt STA
+JMP2r
+
+( recalcule la forme d'onde de la voix courante : onde, largeur, niveau )
+@voice-render
+	#00 ;vi LDA #0120 MUL2 ;vbuf ADD2 ;rd STA2
+	#02 ;vf JSR2 LDA ;rl STA
+	#0c ;vf JSR2 LDA ;rw STA
+	;calc-pw JSR2
+	;rw LDA #08 AND ;&noise JCN2
+	;render-wave JMP2
+	&noise ;render-noise JMP2
+
+@render-wave
+	#00 ;ri STA
+	&l
+		#ff
+		;rw LDA #01 AND #00 EQU ;&n1 JCN2
+		;tri64 ;ri LDA #00 SWP ADD2 LDA AND
+		&n1
+		;rw LDA #02 AND #00 EQU ;&n2 JCN2
+		;saw64 ;ri LDA #00 SWP ADD2 LDA AND
+		&n2
+		;rw LDA #04 AND #00 EQU ;&n3 JCN2
+		;ri LDA ;rt LDA LTH ;&n3 JCN2
+		POP #00
+		&n3
+		;rl LDA ;scale JSR2
+		;rd LDA2 ;ri LDA #00 SWP ADD2 STA
+		;ri LDA INC DUP ;ri STA #40 LTH ;&l JCN2
+JMP2r
+
+@render-noise
+	#0000 ;rn STA2
+	&l
+		;noisebase ;rn LDA2 ADD2 LDA ;rl LDA ;scale JSR2
+		;rd LDA2 ;rn LDA2 ADD2 STA
+		;rn LDA2 INC2 DUP2 ;rn STA2 #0120 LTH2 ;&l JCN2
+JMP2r
+
+( val lvl -- out : echantillon non signe centre sur 80, amplitude * lvl / 256 )
+@scale
+	STH
+	DUP #80 LTH ;&neg JCN2
+	#80 SUB #00 SWP STHr #00 SWP MUL2 POP #80 ADD
+JMP2r
+	&neg #80 SWP SUB #00 SWP STHr #00 SWP MUL2 POP #80 SWP SUB
+JMP2r
+
+( bruit de base : xorshift 16 bits )
+@init-noise
+	#ace1 ;rng STA2
+	#0000 ;ni STA2
+	&l
+		;rng LDA2 DUP2 #70 SFT2 EOR2 DUP2 #09 SFT2 EOR2 DUP2 #80 SFT2 EOR2
+		DUP2 ;rng STA2 POP
+		;noisebase ;ni LDA2 ADD2 STA
+		;ni LDA2 INC2 DUP2 ;ni STA2 #0120 LTH2 ;&l JCN2
+JMP2r
+
+( ==== instruments ==== )
+( inst p -- addr* : adresse du parametre p de l'instrument )
+@par
+	STH #00 SWP #60 SFT2 ;ins ADD2
+	STHr #00 SWP DUP2 ADD2 ADD2 #0002 ADD2
+JMP2r
+
+@init-inst
+	#01 ;ins STA
+	;s-square ;ins #0036 ADD2 #0007 ;copy JSR2
+	#01 ;ii STA
+	&l
+		;ii LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+		#1b ;ip LDA2 STA
+		;sid-base ;ip LDA2 #0002 ADD2 #0032 ;copy JSR2
+		#0000 ;ip LDA2 #0034 ADD2 STA2
+		;presets ;ii LDA #01 SUB #1e MUL #00 SWP ADD2 ;pr STA2
+		;pr LDA2 ;ip LDA2 #0036 ADD2 #000a ;copy JSR2
+		#00 ;ij STA
+		&f
+			;ij LDA #02 MUL #00 SWP ;pr LDA2 ADD2 #000a ADD2 LDA2
+			;ij LDA #07 MUL #00 SWP ;ifields ADD2 LDA
+			#00 SWP DUP2 ADD2 #0002 ADD2 ;ip LDA2 ADD2 STA2
+			;ij LDA INC DUP ;ij STA #0a LTH ;&f JCN2
+		;ii LDA INC DUP ;ii STA #08 LTH ;&l JCN2
+JMP2r
+
+( avant un chargement : tout est carre AY ; le fichier redefinit ce qu'il contient )
+@inst-all-ay
+	#00 ;ii STA
+	&l
+		;ii LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+		#01 ;ip LDA2 STA
+		;s-square ;ip LDA2 #0036 ADD2 #0007 ;copy JSR2
+		;ii LDA INC DUP ;ii STA #08 LTH ;&l JCN2
+JMP2r
+
+@inst-prev
+	;cur-inst LDA ;&d JCN2
+JMP2r
+	&d ;cur-inst LDA #01 SUB ;cur-inst STA #01 ;dirty STA
+JMP2r
+
+@inst-next
+	;cur-inst LDA #07 LTH ;&u JCN2
+JMP2r
+	&u ;cur-inst LDA INC ;cur-inst STA #01 ;dirty STA
+JMP2r
+
+( dir -- : modifie le champ courant de l'instrument courant ; Ctrl = grand pas )
+@iedit
+	;ie-d STA
+	;cur-inst LDA #00 SWP #60 SFT2 ;ins ADD2 LDA #1b EQU ;&ok JCN2
+JMP2r
+	&ok
+	;ifield LDA #07 MUL #00 SWP ;ifields ADD2 ;ie-e STA2
+	;cur-inst LDA ;ie-e LDA2 LDA ;par JSR2 ;ie-a STA2
+	;ie-a LDA2 LDA2 ;ie-v STA2
+	;bnow LDA #01 AND ;&big JCN2
+	;ie-e LDA2 #0003 ADD2 LDA2 ;&go JMP2
+	&big ;ie-e LDA2 #0005 ADD2 LDA2
+	&go ;ie-s STA2
+	;ie-d LDA ;&inc JCN2
+	;ie-v LDA2 ;ie-s LDA2 LTH2 ;&z JCN2
+	;ie-v LDA2 ;ie-s LDA2 SUB2 ;&st JMP2
+	&z #0000 ;&st JMP2
+	&inc ;ie-v LDA2 ;ie-s LDA2 ADD2
+	DUP2 ;ie-e LDA2 #0001 ADD2 LDA2 GTH2 ;&cl JCN2 ;&st JMP2
+	&cl POP2 ;ie-e LDA2 #0001 ADD2 LDA2
+	&st ;ie-a LDA2 STA2
+	;ie-e LDA2 LDA #01 NEQ ;&nw JCN2
+	;ie-a LDA2 LDA2 #0000 NEQ2 ;&nw JCN2
+	#0001 ;ie-a LDA2 STA2
+	&nw
+	#01 ;modified STA
+	#01 ;dirty STA
+JMP2r
+
+( ==== cellules : (note, instrument), 2 octets ==== )
+( s r v -- addr* )
+@cell-addr
+	DUP ADD STH #30 SFT STHr ADD
+	STH #00 SWP #0080 MUL2
+	STHr #00 SWP ADD2
+	;pat ADD2
+JMP2r
+
+( ==== entrees ==== )
+@on-controller
+	.Controller/button DEI DUP ;bnow STA
+	DUP ;bprev LDA #ff EOR AND ;bedge STA
+	;bprev STA
+	.Controller/key DEI ;key STA
+	;key LDA ;&k JCN2
+	;do-buttons JSR2
+BRK
+	&k
+		#0000 ;msg STA2
+		;menu LDA ;&m JCN2
+		;dispatch-key JSR2
+		#01 ;dirty STA
+BRK
+	&m ;menu-key JSR2 #01 ;dirty STA
+BRK
+
+@do-buttons
+	;menu LDA ;&m JCN2
+	;bedge LDA #08 AND #00 EQU ;&n0 JCN2 ;k-play JSR2 &n0
+	;bedge LDA #10 AND #00 EQU ;&n1 JCN2 ;b-up JSR2 &n1
+	;bedge LDA #20 AND #00 EQU ;&n2 JCN2 ;b-down JSR2 &n2
+	;bedge LDA #40 AND #00 EQU ;&n3 JCN2 ;b-left JSR2 &n3
+	;bedge LDA #80 AND #00 EQU ;&n4 JCN2 ;b-right JSR2 &n4
+JMP2r
+	&m ;menu-buttons JMP2
+
+@b-up
+	;view LDA ;&iv JCN2
+	;bnow LDA #04 AND ;k-octup JCN2
+	;bnow LDA #01 AND ;&sp JCN2
+	;cur-r LDA ;&dec JCN2
+JMP2r
+	&dec ;cur-r LDA #01 SUB ;cur-r STA #01 ;dirty STA
+JMP2r
+	&sp ;spd LDA #20 LTH ;&inc JCN2
+JMP2r
+	&inc ;spd LDA INC ;spd STA #01 ;modified STA #01 ;dirty STA
+JMP2r
+	&iv ;ifield LDA ;&idec JCN2
+JMP2r
+	&idec ;ifield LDA #01 SUB ;ifield STA #01 ;dirty STA
+JMP2r
+
+@b-down
+	;view LDA ;&iv JCN2
+	;bnow LDA #04 AND ;k-octdn JCN2
+	;bnow LDA #01 AND ;&sp JCN2
+	;cur-r LDA #0f LTH ;&inc JCN2
+JMP2r
+	&inc ;cur-r LDA INC ;cur-r STA #01 ;dirty STA
+JMP2r
+	&sp ;spd LDA #01 GTH ;&dec JCN2
+JMP2r
+	&dec ;spd LDA #01 SUB ;spd STA #01 ;modified STA #01 ;dirty STA
+JMP2r
+	&iv ;ifield LDA #09 LTH ;&iinc JCN2
+JMP2r
+	&iinc ;ifield LDA INC ;ifield STA #01 ;dirty STA
+JMP2r
+
+@b-left
+	;bnow LDA #04 AND ;inst-prev JCN2
+	;view LDA ;&iv JCN2
+	;bnow LDA #01 AND ;song-prev JCN2
+	;cur-v LDA ;&dec JCN2
+JMP2r
+	&dec ;cur-v LDA #01 SUB ;cur-v STA #01 ;dirty STA
+JMP2r
+	&iv #00 ;iedit JMP2
+
+@b-right
+	;bnow LDA #04 AND ;inst-next JCN2
+	;view LDA ;&iv JCN2
+	;bnow LDA #01 AND ;song-next JCN2
+	;cur-v LDA #03 LTH ;&inc JCN2
+JMP2r
+	&inc ;cur-v LDA INC ;cur-v STA #01 ;dirty STA
+JMP2r
+	&iv #01 ;iedit JMP2
+
+@song-prev
+	;cur-s LDA ;&dec JCN2
+JMP2r
+	&dec ;cur-s LDA #01 SUB ;cur-s STA #01 ;dirty STA
+JMP2r
+
+( Ctrl+droite : motif suivant ; au dernier, en ajoute un vide (32 max) )
+@song-next
+	;cur-s LDA INC ;len LDA LTH ;&inc JCN2
+	;len LDA #20 LTH ;&add JCN2
+JMP2r
+	&add ;len LDA INC ;len STA #01 ;modified STA
+	&inc ;cur-s LDA INC ;cur-s STA #01 ;dirty STA
+JMP2r
+
+( supprime le motif courant : remonte les suivants, vide le dernier )
+@song-del
+	;len LDA #01 GTH ;&ok JCN2
+JMP2r
+	&ok
+	;cur-s LDA INC #00 SWP #0080 MUL2 ;pat ADD2
+	;cur-s LDA #00 SWP #0080 MUL2 ;pat ADD2
+	;len LDA ;cur-s LDA SUB #01 SUB #00 SWP #0080 MUL2
+	;copy JSR2
+	;len LDA #01 SUB #00 SWP #0080 MUL2 ;pat ADD2 #0080 #ff ;fill JSR2
+	;len LDA #01 SUB ;len STA
+	;cur-s LDA ;len LDA LTH ;&k JCN2
+	;len LDA #01 SUB ;cur-s STA
+	&k #01 ;modified STA #01 ;dirty STA
+JMP2r
+
+( ---- touches : table (touche, gestionnaire) ---- )
+@dispatch-key
+	;keytab
+	&l
+		LDAk #00 EQU ;&none JCN2
+		LDAk ;key LDA EQU ;&hit JCN2
+		#0003 ADD2 ;&l JMP2
+	&hit INC2 LDA2 JMP2
+	&none POP2 ;piano-key JMP2
+
+@keytab
+	20 =k-play
+	0d =k-menu
+	1b =k-menu
+	09 =k-view
+	08 =k-clear
+	7f =k-clear
+	27 =k-off
+	2d =k-octdn
+	3d =k-octup
+	3b =k-layout
+	00
+
+@k-play ;playing LDA ;&stop JCN2 ;play-start JMP2
+	&stop ;play-stop JMP2
+@k-off #fe ;set-cell JSR2 ;step-down JMP2
+@k-clear
+	;bnow LDA #01 AND ;song-del JCN2
+	#ff ;set-cell JMP2
+@k-octdn ;oct LDA ;&d JCN2
+JMP2r
+	&d ;oct LDA #01 SUB ;oct STA #01 ;dirty STA
+JMP2r
+@k-octup ;oct LDA #07 LTH ;&u JCN2
+JMP2r
+	&u ;oct LDA INC ;oct STA #01 ;dirty STA
+JMP2r
+@k-layout ;layout LDA #01 EOR ;layout STA
+JMP2r
+@k-view ;view LDA #01 EOR ;view STA
+JMP2r
+@k-menu #01 ;menu STA #01 ;msel STA #00 ;mconf STA
+JMP2r
+
+( n -- : ecrit dans la cellule du curseur : note, et l'instrument courant si c'est une vraie note )
+@set-cell
+	;cur-s LDA ;cur-r LDA ;cur-v LDA ;cell-addr JSR2 ;sca STA2
+	;scn STA
+	;scn LDA #fe LTH ;&real JCN2
+	#ff ;&st JMP2
+	&real ;cur-inst LDA
+	&st ;sca LDA2 INC2 STA
+	;scn LDA ;sca LDA2 STA
+	#01 ;modified STA
+JMP2r
+
+@step-down
+	;cur-r LDA INC DUP #10 LTH ;&ok JCN2
+	POP ;cur-r LDA
+	&ok ;cur-r STA
+JMP2r
+
+( touche -> note : deux rangees de 12 touches selon la disposition clavier )
+@piano-key
+	;key LDA
+	DUP #40 GTH OVR #5b LTH AND #00 EQU ;&nu JCN2
+	#20 ORA
+	&nu
+	;find-piano JSR2
+	DUP #ff EQU ;&no JCN2
+	;oct LDA #0c MUL ADD
+	DUP #6c LTH #00 EQU ;&no JCN2
+	;view LDA ;&pv JCN2
+	;enter-note JMP2
+	&pv ;preview JMP2
+	&no POP
+JMP2r
+
+( c -- idx|ff )
+@find-piano
+	;fp-c STA
+	;layout LDA ;&q JCN2
+	;tab-az ;&s JMP2
+	&q ;tab-qw
+	&s
+	#00 ;fp-i STA
+	&l
+		LDAk ;fp-c LDA EQU ;&hit JCN2
+		INC2 ;fp-i LDA INC DUP ;fp-i STA #18 LTH ;&l JCN2
+	POP2 #ff
+JMP2r
+	&hit POP2 ;fp-i LDA
+JMP2r
+
+( n -- : pose la note, la joue, descend d'une ligne )
+@enter-note
+	DUP ;set-cell JSR2
+	;cur-v LDA SWP ;cur-inst LDA ;trigger JSR2
+	;step-down JMP2
+
+( n -- : ecoute la note avec l'instrument courant, sans rien ecrire )
+@preview
+	#00 SWP ;cur-inst LDA ;trigger JMP2
+
+@tab-az "wsxdcvgbhnj, "a 00 "z 00 "e "r 00 "t 00 "y 00 "u
+@tab-qw "zsxdcvgbhnjm "q "2 "w "3 "e "r "5 "t "6 "y "7 "u
+
+( addr* n* v -- : remplissage )
+@fill
+	;fv STA ;fn STA2 ;fptr STA2
+	&l
+		;fn LDA2 #0000 EQU2 ;&d JCN2
+		;fv LDA ;fptr LDA2 STA
+		;fptr LDA2 INC2 ;fptr STA2
+		;fn LDA2 #0001 SUB2 ;fn STA2
+		;&l JMP2
+	&d
+JMP2r
+
+( src* dst* n* -- : copie vers le bas )
+@copy
+	;cn STA2 ;cdst STA2 ;cs2 STA2
+	&l
+		;cn LDA2 #0000 EQU2 ;&d JCN2
+		;cs2 LDA2 LDA ;cdst LDA2 STA
+		;cs2 LDA2 INC2 ;cs2 STA2
+		;cdst LDA2 INC2 ;cdst STA2
+		;cn LDA2 #0001 SUB2 ;cn STA2
+		;&l JMP2
+	&d
+JMP2r
+
+( ==== menu fichier ==== )
+@menu-buttons
+	;mconf LDA ;&r JCN2
+	;bedge LDA #10 AND #00 EQU ;&n1 JCN2 ;m-up JSR2 &n1
+	;bedge LDA #20 AND #00 EQU ;&n2 JCN2 ;m-down JSR2 &n2
+	&r
+JMP2r
+
+@m-up ;msel LDA ;&d JCN2
+JMP2r
+	&d ;msel LDA #01 SUB ;msel STA #01 ;dirty STA
+JMP2r
+@m-down ;msel LDA #04 LTH ;&u JCN2
+JMP2r
+	&u ;msel LDA INC ;msel STA #01 ;dirty STA
+JMP2r
+
+@menu-key
+	;key LDA #1b EQU ;&esc JCN2
+	;mconf LDA ;&conf JCN2
+	;key LDA #0d EQU ;&act JCN2
+	;key LDA #08 EQU ;&bs JCN2
+	;key LDA #7f EQU ;&bs JCN2
+	;msel LDA ;&other JCN2
+	;name-char JMP2
+	&other
+JMP2r
+	&esc ;mconf LDA ;&ec JCN2
+	#00 ;menu STA
+JMP2r
+	&ec #00 ;mconf STA
+JMP2r
+	&bs ;msel LDA ;&other JCN2
+	;name-bs JMP2
+	&conf ;key LDA #20 ORA #79 EQU ;&yes JCN2
+	#00 ;mconf STA
+JMP2r
+	&yes ;do-confirmed JMP2
+	&act ;msel LDA ;menu-act JMP2
+
+( row -- )
+@menu-act
+	DUP #01 EQU ;&save JCN2
+	DUP #02 EQU ;&load JCN2
+	DUP #03 EQU ;&new JCN2
+	DUP #04 EQU ;&close JCN2
+	POP
+JMP2r
+	&save POP ;file-exists JSR2 ;&ex JCN2
+	;save-go JMP2
+	&ex #01 ;mconf STA
+JMP2r
+	&load POP ;modified LDA ;&dl JCN2
+	;load-go JMP2
+	&dl #02 ;mconf STA
+JMP2r
+	&new POP ;modified LDA ;&dn JCN2
+	;new-go JMP2
+	&dn #03 ;mconf STA
+JMP2r
+	&close POP #00 ;menu STA
+JMP2r
+
+@do-confirmed
+	;mconf LDA #00 ;mconf STA
+	DUP #01 EQU ;&s JCN2
+	DUP #02 EQU ;&l JCN2
+	DUP #03 EQU ;&n JCN2
+	POP
+JMP2r
+	&s POP ;save-go JMP2
+	&l POP ;load-go JMP2
+	&n POP ;new-go JMP2
+
+@save-go ;do-save JMP2
+@load-go ;do-load JMP2
+
+@new-go
+	;playing LDA ;&np JCN2 ;&go JMP2
+	&np ;play-stop JSR2
+	&go
+	;pat #1000 #ff ;fill JSR2
+	#01 ;len STA
+	#06 ;spd STA
+	#00 ;cur-s STA
+	#00 ;cur-r STA
+	#00 ;cur-v STA
+	#00 ;cur-inst STA
+	#00 ;ifield STA
+	;init-inst JSR2
+	#00 ;modified STA
+	#00 ;menu STA
+	;s-newsong ;msg STA2
+JMP2r
+
+( -- flag : le fichier existe-t-il deja ? )
+@file-exists
+	;fname .File/name DEO2
+	#0001 .File/length DEO2
+	;rbuf .File/read DEO2
+	.File/success DEI2 #0000 NEQ2
+JMP2r
+
+@name-char
+	;key LDA
+	DUP #40 GTH OVR #5b LTH AND #00 EQU ;&nu JCN2
+	#20 ORA
+	&nu
+	DUP #60 GTH OVR #7b LTH AND ;&ok JCN2
+	DUP #2f GTH OVR #3a LTH AND ;&ok JCN2
+	DUP #2e EQU ;&ok JCN2
+	DUP #5f EQU ;&ok JCN2
+	DUP #2d EQU ;&ok JCN2
+	POP
+JMP2r
+	&ok ;nlen LDA #0f LTH ;&add JCN2
+	POP
+JMP2r
+	&add
+	;nlen LDA #00 SWP ;fname ADD2 STA
+	;nlen LDA INC ;nlen STA
+	#00 ;nlen LDA #00 SWP ;fname ADD2 STA
+JMP2r
+
+@name-bs
+	;nlen LDA ;&d JCN2
+JMP2r
+	&d ;nlen LDA #01 SUB ;nlen STA
+	#00 ;nlen LDA #00 SWP ;fname ADD2 STA
+JMP2r
+
+( ==== texte : put = ecran (mode 0) ou fichier (mode 1) ==== )
+@put ( c -- )
+	;mode LDA ;emit JCN2
+	;draw-char JMP2
+
+@draw-char ( c -- )
+	DUP #60 GTH ;&lc JCN2
+	;&go JMP2
+	&lc #20 SUB
+	&go
+	#20 SUB
+	DUP #40 LTH ;&ok JCN2
+	POP #00
+	&ok
+	#00 SWP #30 SFT2 ;font ADD2 .Screen/addr DEO2
+	;cx LDA2 .Screen/x DEO2
+	;cy LDA2 .Screen/y DEO2
+	;col LDA .Screen/sprite DEO
+	;cx LDA2 #0008 ADD2 ;cx STA2
+JMP2r
+
+( col row -- : curseur de texte, colonnes de 8 px, lignes de 10 px )
+@at
+	#00 SWP #000a MUL2 ;cy STA2
+	#00 SWP #30 SFT2 ;cx STA2
+JMP2r
+
+@put-str ( str* -- )
+	&l LDAk ;&go JCN2
+	POP2
+JMP2r
+	&go LDAk ;put JSR2 INC2 ;&l JMP2
+
+@put-hex ( b -- )
+	DUP #04 SFT ;put-nib JSR2
+	;put-nib JMP2
+
+@put-nib ( n -- )
+	#0f AND DUP #0a LTH ;&d JCN2
+	#07 ADD
+	&d #30 ADD
+	;put JMP2
+
+@put-hexmin ( b -- : %X, sans zero de tete )
+	DUP #f0 AND ;&two JCN2
+	;put-nib JMP2
+	&two ;put-hex JMP2
+
+( n -- : nom de note a la CCT : C-4, F#2, OFF, --- )
+@put-note
+	DUP #ff EQU ;&none JCN2
+	DUP #fe EQU ;&off JCN2
+	DUP #0c DIV STH
+	STHkr #0c MUL SUB
+	DUP ADD #00 SWP ;notenames ADD2
+	LDAk ;put JSR2 INC2 LDA ;put JSR2
+	STHr #30 ADD ;put JMP2
+	&none POP ;s-none ;put-str JMP2
+	&off POP ;s-off ;put-str JMP2
+
+( n* -- : decimal sans zeros de tete )
+@emit-dec
+	;dn STA2
+	#00 ;dz STA
+	#2710 ;emit-dig JSR2
+	#03e8 ;emit-dig JSR2
+	#0064 ;emit-dig JSR2
+	#000a ;emit-dig JSR2
+	;dn LDA2 NIP #30 ADD ;put JMP2
+
+@emit-dig ( d* -- )
+	DUP2 ;ddiv STA2
+	;dn LDA2 SWP2 DIV2 NIP
+	DUP ;dz LDA ORA ;&print JCN2
+	POP
+JMP2r
+	&print
+	#01 ;dz STA
+	DUP #30 ADD ;put JSR2
+	#00 SWP ;ddiv LDA2 MUL2
+	;dn LDA2 SWP2 SUB2 ;dn STA2
+JMP2r
+
+( ---- fichier : tampon de 240 octets vide dans le fichier ---- )
+@emit ( c -- )
+	;opos LDA2 ;obuf ADD2 STA
+	;opos LDA2 INC2 DUP2 ;opos STA2
+	#00f0 LTH2 ;&ok JCN2
+	;flush JSR2
+	&ok
+JMP2r
+
+@flush
+	;opos LDA2 #0000 EQU2 ;&d JCN2
+	;opos LDA2 .File/length DEO2
+	;obuf .File/write DEO2
+	#01 .File/append DEO
+	#0000 ;opos STA2
+	&d
+JMP2r
+
+( s v -- flag : 1 si les 16 lignes de la voix sont vides )
+@phrase-empty
+	;pe-v STA ;pe-s STA
+	#00 ;pe-r STA
+	&l
+		;pe-s LDA ;pe-r LDA ;pe-v LDA ;cell-addr JSR2 LDA #ff NEQ ;&no JCN2
+		;pe-r LDA INC DUP ;pe-r STA #10 LTH ;&l JCN2
+	#01
+JMP2r
+	&no #00
+JMP2r
+
+( ==== enregistrement ====
+  Motif s, voix v -> chaine = phrase = 4*s+v. Une voix vide : "--" dans le song. )
+@do-save
+	#01 ;mode STA
+	#0000 ;opos STA2
+	;fname .File/name DEO2
+	#00 .File/append DEO
+	;t-head ;put-str JSR2
+	#00 ;pi STA
+	&pl
+		;pi LDA ;put-note JSR2
+		#20 ;put JSR2
+		;pi LDA #00 SWP DUP2 ADD2 ;periods ADD2 LDA2 ;emit-dec JSR2
+		#0a ;put JSR2
+		;pi LDA INC DUP ;pi STA #6c LTH ;&pl JCN2
+	;t-song ;put-str JSR2
+	;save-song JSR2
+	;t-chains ;put-str JSR2
+	;save-chains JSR2
+	;t-groove-h ;put-str JSR2
+	;spd LDA ;put-hex JSR2 #0a ;put JSR2
+	;spd LDA ;put-hex JSR2 #0a ;put JSR2
+	;t-groove-rest ;put-str JSR2
+	;t-phrases ;put-str JSR2
+	;save-phrases JSR2
+	;save-insts JSR2
+	;t-tail ;put-str JSR2
+	;flush JSR2
+	#00 ;mode STA
+	.File/success DEI2 #0000 EQU2 ;&err JCN2
+	;s-saved ;msg STA2
+	#00 ;modified STA
+	#00 ;menu STA
+JMP2r
+	&err ;s-save-err ;msg STA2
+JMP2r
+
+@save-song
+	#00 ;ss STA
+	&r
+		#00 ;sv STA
+		&c
+			;ss LDA ;sv LDA ;phrase-empty JSR2 ;&e JCN2
+			;ss LDA #04 MUL ;sv LDA ADD ;put-hex JSR2 ;&sep JMP2
+			&e ;t-dd ;put-str JSR2
+			&sep
+			;sv LDA #03 LTH ;&sp JCN2
+			#0a ;&pc JMP2
+			&sp #20
+			&pc ;put JSR2
+			;sv LDA INC DUP ;sv STA #04 LTH ;&c JCN2
+		;ss LDA INC DUP ;ss STA ;len LDA LTH ;&r JCN2
+JMP2r
+
+@save-chains
+	#00 ;ss STA
+	&r
+		#00 ;sv STA
+		&c
+			;ss LDA ;sv LDA ;phrase-empty JSR2 ;&skip JCN2
+			;t-chain-h ;put-str JSR2
+			;ss LDA #04 MUL ;sv LDA ADD DUP ;cid STA ;put-hexmin JSR2
+			;t-fence-open ;put-str JSR2
+			#30 ;put JSR2
+			;cid LDA ;put-hex JSR2
+			;t-chain-r0 ;put-str JSR2
+			;t-chain-rest ;put-str JSR2
+			&skip
+			;sv LDA INC DUP ;sv STA #04 LTH ;&c JCN2
+		;ss LDA INC DUP ;ss STA ;len LDA LTH ;&r JCN2
+JMP2r
+
+@save-phrases
+	#00 ;ss STA
+	&r
+		#00 ;sv STA
+		&c
+			;ss LDA ;sv LDA ;phrase-empty JSR2 ;&skip JCN2
+			;t-phrase-h ;put-str JSR2
+			;ss LDA #04 MUL ;sv LDA ADD ;put-hexmin JSR2
+			;t-fence-open ;put-str JSR2
+			#00 ;sr STA
+			&rw
+				;ss LDA ;sr LDA ;sv LDA ;cell-addr JSR2
+				DUP2 LDA DUP ;put-note JSR2
+				#fe LTH ;&on JCN2
+				POP2 ;t-inst-off ;put-str JSR2 ;&tl JMP2
+				&on #20 ;put JSR2 INC2 LDA ;put-hex JSR2
+				&tl ;t-row-tail ;put-str JSR2
+				;sr LDA INC DUP ;sr STA #10 LTH ;&rw JCN2
+			;t-fence-close ;put-str JSR2
+			&skip
+			;sv LDA INC DUP ;sv STA #04 LTH ;&c JCN2
+		;ss LDA INC DUP ;ss STA ;len LDA LTH ;&r JCN2
+JMP2r
+
+( les 8 instruments : AY = bloc fixe, SID = 25 parametres )
+@save-insts
+	;t-insts-h ;put-str JSR2
+	#00 ;ii STA
+	&l
+		;t-inst-h ;put-str JSR2
+		;ii LDA ;put-hexmin JSR2
+		;t-nn ;put-str JSR2
+		;ii LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+		;ip LDA2 LDA #1b EQU ;&sid JCN2
+		;t-ay-body ;put-str JSR2 ;&nx JMP2
+		&sid
+		;t-sid-1 ;put-str JSR2
+		;ip LDA2 #0036 ADD2 ;put-str JSR2
+		;t-sid-2 ;put-str JSR2
+		;ip LDA2 #0034 ADD2 LDA2 ;emit-dec JSR2
+		;t-sid-3 ;put-str JSR2
+		;ip LDA2 #0036 ADD2 ;put-str JSR2
+		;t-sid-4 ;put-str JSR2
+		#00 ;pj STA
+		&pl
+			;pj LDA ;&comma JCN2 ;&val JMP2
+			&comma #2c ;put JSR2
+			&val ;ip LDA2 #0002 ADD2 ;pj LDA #00 SWP DUP2 ADD2 ADD2 LDA2 ;emit-dec JSR2
+			;pj LDA INC DUP ;pj STA #19 LTH ;&pl JCN2
+		#0a ;put JSR2
+		&nx
+		;ii LDA INC DUP ;ii STA #08 LTH ;&l JCN2
+JMP2r
+
+( ==== chargement ====
+  Lit le fichier par blocs, ligne par ligne. Pour chaque case du song on prend la
+  chaine, sa premiere phrase et les 16 notes (avec leur instrument). Instruments :
+  seuls les types 1 (AY) et 27 (SID) des numeros 0 a 7 sont repris. Tout le reste
+  (FX, volumes, tables, transpositions) est ignore. )
+@do-load
+	;playing LDA ;&np JCN2 ;&go JMP2
+	&np ;play-stop JSR2
+	&go
+	#00 ;mode STA
+	;songtmp #0080 #ff ;fill JSR2
+	;chainfirst #0200 #ff ;fill JSR2
+	;phr #4000 #ff ;fill JSR2
+	;inst-all-ay JSR2
+	#00 ;nsong STA
+	#00 ;sec STA
+	#00 ;infence STA
+	#00 ;lpos STA
+	#00 ;ikind STA
+	#ff ;iid STA
+	;fname .File/name DEO2
+	&rd
+		#0100 .File/length DEO2
+		;rbuf .File/read DEO2
+		.File/success DEI2 DUP2 ;rcnt STA2
+		#0000 EQU2 ;&eof JCN2
+		#0000 ;ri STA2
+		&fl
+			;ri LDA2 ;rcnt LDA2 LTH2 #00 EQU ;&rd JCN2
+			;ri LDA2 ;rbuf ADD2 LDA ;lfeed JSR2
+			;ri LDA2 INC2 ;ri STA2
+			;&fl JMP2
+	&eof
+	;lpos LDA ;&last JCN2 ;&fin JMP2
+	&last ;process-line JSR2
+	&fin
+	;nsong LDA ;&ok JCN2
+	;s-load-err ;msg STA2
+JMP2r
+	&ok
+	;pat #1000 #ff ;fill JSR2
+	#00 ;ls STA
+	&sr
+		#00 ;lv STA
+		&c2
+			;songtmp ;ls LDA #04 MUL ;lv LDA ADD #00 SWP ADD2 LDA
+			DUP #ff EQU ;&drop JCN2
+			#00 SWP DUP2 ADD2 ;chainfirst ADD2 LDA2 ;lph STA2
+			;lph LDA2 #0200 LTH2 #00 EQU ;&nx JCN2
+			#00 ;lr STA
+			&rr
+				;phr ;lph LDA2 #50 SFT2 ADD2 ;lr LDA #00 SWP DUP2 ADD2 ADD2 ;sa STA2
+				;ls LDA ;lr LDA ;lv LDA ;cell-addr JSR2 ;dst2 STA2
+				;sa LDA2 LDA ;dst2 LDA2 STA
+				;sa LDA2 INC2 LDA ;dst2 LDA2 INC2 STA
+				;lr LDA INC DUP ;lr STA #10 LTH ;&rr JCN2
+			;&nx JMP2
+			&drop POP
+			&nx
+			;lv LDA INC DUP ;lv STA #04 LTH ;&c2 JCN2
+		;ls LDA INC DUP ;ls STA ;nsong LDA LTH ;&sr JCN2
+	;nsong LDA ;len STA
+	#00 ;cur-s STA
+	#00 ;cur-r STA
+	#00 ;cur-v STA
+	#00 ;modified STA
+	#00 ;menu STA
+	;s-loaded ;msg STA2
+JMP2r
+
+@lfeed ( c -- )
+	DUP #0a EQU ;&nl JCN2
+	DUP #0d EQU ;&cr JCN2
+	;lpos LDA #bf LTH ;&st JCN2
+	&cr POP
+JMP2r
+	&st
+		;lpos LDA #00 SWP ;lbuf ADD2 STA
+		;lpos LDA INC ;lpos STA
+JMP2r
+	&nl POP ;process-line JMP2
+
+@process-line
+	#00 ;lpos LDA #00 SWP ;lbuf ADD2 STA
+	#00 ;lpos STA
+	;lbuf LDA #60 EQU ;&fence JCN2
+	;infence LDA ;&body JCN2
+	;s-h-song ;lstarts JSR2 #00 EQU ;&n1 JCN2 #01 ;sec STA
+JMP2r
+	&n1 ;s-h-chains ;lstarts JSR2 #00 EQU ;&n2 JCN2 #02 ;sec STA
+JMP2r
+	&n2 ;s-h-phr ;lstarts JSR2 #00 EQU ;&n3 JCN2 #03 ;sec STA
+JMP2r
+	&n3 ;s-h-groove ;lstarts JSR2 #00 EQU ;&n4 JCN2 #04 ;sec STA
+JMP2r
+	&n4 ;s-h-inst ;lstarts JSR2 #00 EQU ;&n4b JCN2 #05 ;sec STA
+JMP2r
+	&n4b ;s-h-any ;lstarts JSR2 #00 EQU ;&n5 JCN2 #00 ;sec STA
+JMP2r
+	&n5 ;s-h-chain ;lstarts JSR2 #00 EQU ;&n6 JCN2
+		;lbuf #000a ADD2 ;parse-hexn JSR2 ;cid STA2
+JMP2r
+	&n6 ;s-h-phrase ;lstarts JSR2 #00 EQU ;&n7 JCN2
+		;lbuf #000b ADD2 ;parse-hexn JSR2 ;pid STA2
+JMP2r
+	&n7 ;s-h-groove1 ;lstarts JSR2 #00 EQU ;&n8 JCN2
+		;lbuf #000b ADD2 ;parse-hexn JSR2 ;gid STA2
+JMP2r
+	&n8 ;sec LDA #05 EQU #00 EQU ;&n9 JCN2
+		;line-inst JMP2
+	&n9
+JMP2r
+	&fence
+		;infence LDA #01 EOR ;infence STA
+		#00 ;lrow STA
+JMP2r
+	&body
+		;sec LDA
+		DUP #01 EQU ;&b1 JCN2
+		DUP #02 EQU ;&b2 JCN2
+		DUP #03 EQU ;&b3 JCN2
+		DUP #04 EQU ;&b4 JCN2
+		POP
+JMP2r
+	&b1 POP ;body-song JMP2
+	&b2 POP ;body-chain JMP2
+	&b3 POP ;body-phrase JMP2
+	&b4 POP ;body-groove JMP2
+
+( lignes de la section Instruments )
+@line-inst
+	;s-h-inst1 ;lstarts JSR2 #00 EQU ;&t JCN2
+		;lbuf #000f ADD2 ;parse-hexn JSR2 NIP ;iid STA
+		#00 ;ikind STA
+JMP2r
+	&t ;iid LDA #08 LTH ;&ok JCN2
+JMP2r
+	&ok
+	;iid LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+	;s-p-type ;lstarts JSR2 #00 EQU ;&p JCN2
+		;lbuf #0008 ADD2 ;parse-dec JSR2 NIP
+		DUP #1b EQU ;&sid JCN2
+		DUP #01 EQU ;&ay JCN2
+		POP #00 ;ikind STA
+JMP2r
+		&sid POP #1b ;ikind STA
+			#1b ;ip LDA2 STA
+			;sid-base ;ip LDA2 #0002 ADD2 #0032 ;copy JSR2
+			#0000 ;ip LDA2 #0034 ADD2 STA2
+			;ip LDA2 #0036 ADD2 #000a #00 ;fill JSR2
+JMP2r
+		&ay POP #01 ;ikind STA
+			#01 ;ip LDA2 STA
+JMP2r
+	&p ;ikind LDA #1b EQU #00 EQU ;&q JCN2
+	;s-p-sidp ;lstarts JSR2 #00 EQU ;&s1 JCN2
+		;ip LDA2 #0002 ADD2 ;parse-sid JMP2
+	&s1 ;s-p-sidn ;lstarts JSR2 #00 EQU ;&s2 JCN2
+		;lbuf #000c ADD2 ;ip LDA2 #0036 ADD2 #0009 ;copy-name JMP2
+	&s2 ;s-p-sidi ;lstarts JSR2 #00 EQU ;&q JCN2
+		;lbuf #0012 ADD2 ;parse-dec JSR2 ;ip LDA2 #0034 ADD2 STA2
+	&q
+JMP2r
+
+( src* dst* max* -- : copie un nom de 9 caracteres au plus, termine par 0 )
+@copy-name
+	;cn STA2 ;cdst STA2 ;cs2 STA2
+	&l
+		;cn LDA2 #0000 EQU2 ;&d JCN2
+		;cs2 LDA2 LDA ;&c JCN2
+		;&d JMP2
+		&c ;cs2 LDA2 LDA ;cdst LDA2 STA
+		;cs2 LDA2 INC2 ;cs2 STA2
+		;cdst LDA2 INC2 ;cdst STA2
+		;cn LDA2 #0001 SUB2 ;cn STA2
+		;&l JMP2
+	&d
+	#00 ;cdst LDA2 STA
+JMP2r
+
+( dst* -- : 25 nombres decimaux separes par des virgules, a partir de la colonne 18 )
+@parse-sid
+	;ps-d STA2
+	;lbuf #0012 ADD2
+	#00 ;ps-i STA
+	&l
+		;parse-dec JSR2
+		;ps-d LDA2 ;ps-i LDA #00 SWP DUP2 ADD2 ADD2 STA2
+		;pd-p LDA2 INC2
+		;ps-i LDA INC DUP ;ps-i STA #19 LTH ;&l JCN2
+	POP2
+JMP2r
+
+( ptr* -- n* : decimal, s'arrete au premier caractere qui n'est pas un chiffre )
+@parse-dec
+	;pd-p STA2
+	#0000 ;pd-n STA2
+	&l
+		;pd-p LDA2 LDA
+		DUP #30 LTH ;&done JCN2
+		DUP #3a LTH ;&dig JCN2
+	&done POP ;pd-n LDA2
+JMP2r
+	&dig
+		#30 SUB #00 SWP ;pd-n LDA2 #000a MUL2 ADD2 ;pd-n STA2
+		;pd-p LDA2 INC2 ;pd-p STA2 ;&l JMP2
+
+( ligne du song : "05 -- 06 --" ; 32 lignes au plus )
+@body-song
+	;nsong LDA #20 LTH ;&ok JCN2
+JMP2r
+	&ok ;lbuf #000a ADD2 LDA ;&ok2 JCN2
+JMP2r
+	&ok2
+	#00 ;sc STA
+	&c
+		;lbuf ;sc LDA #03 MUL #00 SWP ADD2 ;parse-b2 JSR2
+		;nsong LDA #04 MUL ;sc LDA ADD #00 SWP ;songtmp ADD2 STA
+		;sc LDA INC DUP ;sc STA #04 LTH ;&c JCN2
+	;nsong LDA INC ;nsong STA
+JMP2r
+
+( chaine : on ne garde que la phrase de la 1re ligne )
+@body-chain
+	;lrow LDA #00 NEQ ;&skip JCN2
+	;cid LDA2 #0100 LTH2 ;&ok JCN2
+	;&skip JMP2
+	&ok
+	;lbuf LDA #2d EQU ;&none JCN2
+	;lbuf ;parse-hexn JSR2 ;&st JMP2
+	&none #ffff
+	&st ;cid LDA2 DUP2 ADD2 ;chainfirst ADD2 STA2
+	&skip ;lrow LDA INC ;lrow STA
+JMP2r
+
+( phrase : note et instrument, 16 lignes ; instrument >= 8 ou absent : 0 )
+@body-phrase
+	;lrow LDA #10 LTH ;&ok JCN2
+JMP2r
+	&ok ;pid LDA2 #0200 LTH2 ;&ok2 JCN2
+	;&inc JMP2
+	&ok2
+	;pid LDA2 #50 SFT2 ;lrow LDA #00 SWP DUP2 ADD2 ADD2 ;phr ADD2 ;sa STA2
+	;lbuf ;parse-note JSR2
+	DUP ;sa LDA2 STA
+	#fe LTH ;&real JCN2
+	#ff ;&st JMP2
+	&real ;lbuf #0004 ADD2 ;parse-b2 JSR2
+	DUP #08 LTH ;&st JCN2
+	POP #00
+	&st ;sa LDA2 INC2 STA
+	&inc ;lrow LDA INC ;lrow STA
+JMP2r
+
+( groove 0, 1re ligne : tempo )
+@body-groove
+	;lrow LDA #00 NEQ ;&inc JCN2
+	;gid LDA2 #0000 NEQ2 ;&inc JCN2
+	;lbuf ;parse-b2 JSR2
+	DUP #ff NEQ OVR #00 NEQ AND ;&ok JCN2
+	POP ;&inc JMP2
+	&ok ;spd STA
+	&inc ;lrow LDA INC ;lrow STA
+JMP2r
+
+( lit* -- flag : la ligne commence par lit ? )
+@lstarts
+	;ls-p STA2
+	#00 ;ls-i STA
+	&l
+		;ls-p LDA2 ;ls-i LDA #00 SWP ADD2 LDA
+		DUP #00 EQU ;&yes JCN2
+		;lbuf ;ls-i LDA #00 SWP ADD2 LDA
+		NEQ ;&no JCN2
+		;ls-i LDA INC ;ls-i STA ;&l JMP2
+	&yes POP #01
+JMP2r
+	&no #00
+JMP2r
+
+( c -- n|ff )
+@hexval
+	DUP #30 LTH ;&bad JCN2
+	DUP #3a LTH ;&dig JCN2
+	DUP #41 LTH ;&bad JCN2
+	DUP #47 LTH ;&up JCN2
+	DUP #61 LTH ;&bad JCN2
+	DUP #67 LTH ;&lo JCN2
+	&bad POP #ff
+JMP2r
+	&dig #30 SUB
+JMP2r
+	&up #37 SUB
+JMP2r
+	&lo #57 SUB
+JMP2r
+
+( ptr* -- n* : hexa de longueur quelconque )
+@parse-hexn
+	#0000 ;ph-n STA2
+	&l
+		LDAk ;hexval JSR2 DUP #ff EQU ;&done JCN2
+		#00 SWP ;ph-n LDA2 #40 SFT2 ORA2 ;ph-n STA2
+		INC2 ;&l JMP2
+	&done POP POP2 ;ph-n LDA2
+JMP2r
+
+( ptr* -- n : deux chiffres hexa, ou "--" -> ff )
+@parse-b2
+	LDAk #2d EQU ;&dash JCN2
+	DUP2 LDA ;hexval JSR2 #40 SFT
+	STH INC2 LDA ;hexval JSR2 STHr ORA
+JMP2r
+	&dash POP2 #ff
+JMP2r
+
+( ptr* -- n : "C-4" -> 48, "F#2" -> 29, "OFF" -> fe, "---" -> ff )
+@parse-note
+	LDAk #2d EQU ;&none JCN2
+	LDAk #4f EQU ;&off JCN2
+	DUP2 LDA #41 SUB DUP #07 LTH ;&ok JCN2
+	POP POP2 #ff
+JMP2r
+	&ok
+	#00 SWP ;semis ADD2 LDA STH
+	INC2 LDAk #23 EQU STHr ADD STH
+	INC2 LDA #30 SUB #0c MUL STHr ADD
+	DUP #6c LTH ;&done JCN2
+	POP #ff
+	&done
+JMP2r
+	&none POP2 #ff
+JMP2r
+	&off POP2 #fe
+JMP2r
+
+( ==== affichage ==== )
+@redraw
+	#00 ;mode STA
+	#0000 .Screen/x DEO2
+	#0000 .Screen/y DEO2
+	#80 .Screen/pixel DEO
+	;menu LDA ;draw-menu JCN2
+	;draw-top JSR2
+	;view LDA ;draw-iview JCN2
+	#02 ;col STA
+	#00
+	&vh
+		DUP #06 MUL #04 ADD #04 ;at JSR2
+		#56 ;put JSR2
+		DUP #31 ADD ;put JSR2
+		INC DUP #04 LTH ;&vh JCN2
+	POP
+	;draw-grid JSR2
+	;draw-help JSR2
+	;msg LDA2 #0000 NEQ2 ;&show JCN2
+JMP2r
+	&show
+	#03 ;col STA
+	#01 #16 ;at JSR2
+	;msg LDA2 ;put-str JMP2
+
+( titre, etat, morceau, tempo, octave, instrument, disposition clavier )
+@draw-top
+	#03 ;col STA
+	#01 #00 ;at JSR2 ;s-title ;put-str JSR2
+	;modified LDA ;&mod JCN2 ;&nm JMP2
+	&mod #2a ;put JSR2
+	&nm
+	#02 ;col STA
+	#1e #00 ;at JSR2
+	;playing LDA ;&pl JCN2
+	;s-stop ;&p1 JMP2
+	&pl ;s-play
+	&p1 ;put-str JSR2
+	#01 ;col STA
+	#01 #01 ;at JSR2
+	;s-song ;put-str JSR2
+	;cur-s LDA INC ;put-hex JSR2
+	#2f ;put JSR2
+	;len LDA ;put-hex JSR2
+	#0d #01 ;at JSR2 ;s-spd ;put-str JSR2 ;spd LDA ;put-hex JSR2
+	#15 #01 ;at JSR2 ;s-oct ;put-str JSR2 ;oct LDA ;put-nib JSR2
+	#1b #01 ;at JSR2 ;s-ins ;put-str JSR2 ;cur-inst LDA ;put-nib JSR2
+	#01 #02 ;at JSR2
+	;s-keys ;put-str JSR2
+	;layout LDA ;&q JCN2
+	;s-azerty ;&k JMP2
+	&q ;s-qwerty
+	&k ;put-str JMP2
+
+@draw-grid
+	#00 ;gr STA
+	&row
+		;gr LDA ;hl-row LDA EQU
+		;hl-song LDA ;cur-s LDA EQU AND
+		;playing LDA AND ;hlf STA
+		#01 ;col STA
+		;gr LDA #03 AND ;&nb JCN2
+		#03 ;col STA
+		&nb
+		;hlf LDA #00 EQU ;&nh JCN2
+		#02 ;col STA
+		&nh
+		#01 ;gr LDA #05 ADD ;at JSR2
+		;gr LDA ;put-hex JSR2
+		#00 ;gv STA
+		&cell
+			#04 ;gv LDA #06 MUL ADD ;gr LDA #05 ADD ;at JSR2
+			;hlf LDA ;&c2 JCN2
+			#01 ;&cs JMP2
+			&c2 #02
+			&cs ;col STA
+			;gv LDA ;cur-v LDA EQU ;gr LDA ;cur-r LDA EQU AND #00 EQU ;&nocur JCN2
+			#0c ;col STA
+			&nocur
+			;cur-s LDA ;gr LDA ;gv LDA ;cell-addr JSR2
+			DUP2 LDA DUP ;put-note JSR2
+			#fe LTH ;&hi JCN2
+			POP2 ;&cn JMP2
+			&hi #20 ;put JSR2 INC2 LDA ;put-nib JSR2
+			&cn
+			;gv LDA INC DUP ;gv STA #04 LTH ;&cell JCN2
+		;gr LDA INC DUP ;gr STA #10 LTH ;&row JCN2
+JMP2r
+
+( ---- vue instruments ---- )
+@draw-iview
+	#03 ;col STA
+	#01 #04 ;at JSR2 ;s-inst-h ;put-str JSR2 ;cur-inst LDA ;put-nib JSR2 #20 ;put JSR2
+	;cur-inst LDA #00 SWP #60 SFT2 ;ins ADD2 ;ip STA2
+	#01 ;col STA
+	;ip LDA2 LDA #1b EQU ;&sid JCN2
+	;s-square ;put-str JSR2
+	#01 #06 ;at JSR2 ;s-ay-note ;put-str JSR2
+	;draw-ihelp JMP2
+	&sid
+	;ip LDA2 #0036 ADD2 ;put-str JSR2
+	#00 ;ij STA
+	&f
+		#01 ;col STA
+		;ij LDA ;ifield LDA EQU ;&nsel JCN2 ;&gc JMP2
+		&nsel #0c ;col STA
+		&gc
+		#02 ;ij LDA #06 ADD ;at JSR2
+		;ifnames ;ij LDA #00 SWP DUP2 ADD2 ADD2 LDA2 ;put-str JSR2
+		#0f ;ij LDA #06 ADD ;at JSR2
+		;cur-inst LDA ;ij LDA #07 MUL #00 SWP ;ifields ADD2 LDA ;par JSR2 LDA2
+		;ij LDA #00 EQU ;&wv JCN2
+		;emit-dec JSR2 ;&nx JMP2
+		&wv ;put-wave JSR2
+		&nx
+		;ij LDA INC DUP ;ij STA #0a LTH ;&f JCN2
+	;draw-ihelp JMP2
+
+@put-wave ( v* -- : lettres T S P N )
+	NIP DUP #01 AND ;&t JCN2 ;&s1 JMP2
+	&t #54 ;put JSR2
+	&s1 DUP #02 AND ;&s JCN2 ;&p1 JMP2
+	&s #53 ;put JSR2
+	&p1 DUP #04 AND ;&p JCN2 ;&n1 JMP2
+	&p #50 ;put JSR2
+	&n1 #08 AND ;&n JCN2
+JMP2r
+	&n #4e ;put JMP2
+
+( ---- menu fichier ---- )
+@draw-menu
+	#03 ;col STA
+	#01 #00 ;at JSR2 ;s-title ;put-str JSR2
+	#20 ;put JSR2 ;s-menu ;put-str JSR2
+	#00 ;ij STA
+	&r
+		#01 ;col STA
+		;ij LDA ;msel LDA EQU #00 EQU ;&nsel JCN2
+		#0c ;col STA
+		&nsel
+		#02 ;ij LDA #02 MUL #03 ADD ;at JSR2
+		;mitems ;ij LDA #00 SWP DUP2 ADD2 ADD2 LDA2 ;put-str JSR2
+		;ij LDA #00 NEQ ;&nx JCN2
+		;fname ;put-str JSR2
+		;msel LDA ;&us JCN2 ;&nx JMP2
+		&us #5f ;put JSR2
+		&nx
+		;ij LDA INC DUP ;ij STA #05 LTH ;&r JCN2
+	#03 ;col STA
+	;modified LDA ;&un JCN2 ;&nu JMP2
+	&un #02 #0e ;at JSR2 ;s-unsaved ;put-str JSR2
+	&nu
+	;mconf LDA #01 EQU ;&c1 JCN2
+	;mconf LDA #02 EQU ;&c2 JCN2
+	;mconf LDA #03 EQU ;&c3 JCN2
+	;&cm JMP2
+	&c1 #02 #10 ;at JSR2 ;s-c1 ;put-str JSR2 ;&cm JMP2
+	&c2 #02 #10 ;at JSR2 ;s-c2 ;put-str JSR2 ;&cm JMP2
+	&c3 #02 #10 ;at JSR2 ;s-c3 ;put-str JSR2
+	&cm
+	;msg LDA2 #0000 NEQ2 ;&ms JCN2 ;&mh JMP2
+	&ms #02 #12 ;at JSR2 ;msg LDA2 ;put-str JSR2
+	&mh
+	#01 ;col STA
+	#02 #16 ;at JSR2 ;s-mhint ;put-str JMP2
+
+( ==== donnees ==== )
+@wave-sqr 0000 0000 0000 0000 0000 0000 0000 0000 ffff ffff ffff ffff ffff ffff ffff ffff
+
+( ==== BEGIN GENERATED (tools/gen_data.py) ==== )
+@font
+	0000 0000 0000 0000 ( space )
+	1010 1010 1000 1000 ( ! )
+	0000 0000 0000 0000 ( " )
+	2828 7c28 7c28 2800 ( # )
+	0000 0000 0000 0000 ( $ )
+	0000 0000 0000 0000 ( % )
+	0000 0000 0000 0000 ( & )
+	1010 2000 0000 0000 ( ' )
+	0810 2020 2010 0800 ( lparen )
+	2010 0808 0810 2000 ( rparen )
+	0054 387c 3854 0000 ( * )
+	0010 107c 1010 0000 ( + )
+	0000 0000 3010 2000 ( , )
+	0000 007c 0000 0000 ( - )
+	0000 0000 0030 3000 ( . )
+	0404 0810 2040 4000 ( / )
+	3844 4c54 6444 3800 ( 0 )
+	1030 1010 1010 3800 ( 1 )
+	3844 0408 1020 7c00 ( 2 )
+	3844 0418 0444 3800 ( 3 )
+	0818 2848 7c08 0800 ( 4 )
+	7c40 7804 0444 3800 ( 5 )
+	3840 4078 4444 3800 ( 6 )
+	7c04 0810 2020 2000 ( 7 )
+	3844 4438 4444 3800 ( 8 )
+	3844 443c 0408 3000 ( 9 )
+	0030 3000 3030 0000 ( : )
+	0030 3000 3010 2000 ( ; )
+	0408 1020 1008 0400 ( < )
+	0000 7c00 7c00 0000 ( = )
+	4020 1008 1020 4000 ( > )
+	3844 0408 1000 1000 ( ? )
+	0000 0000 0000 0000 ( @ )
+	3844 447c 4444 4400 ( A )
+	7844 4478 4444 7800 ( B )
+	3844 4040 4044 3800 ( C )
+	7844 4444 4444 7800 ( D )
+	7c40 4078 4040 7c00 ( E )
+	7c40 4078 4040 4000 ( F )
+	3844 405c 4444 3800 ( G )
+	4444 447c 4444 4400 ( H )
+	3810 1010 1010 3800 ( I )
+	1c08 0808 0848 3000 ( J )
+	4448 5060 5048 4400 ( K )
+	4040 4040 4040 7c00 ( L )
+	446c 5454 4444 4400 ( M )
+	4464 544c 4444 4400 ( N )
+	3844 4444 4444 3800 ( O )
+	7844 4478 4040 4000 ( P )
+	3844 4444 5448 3400 ( Q )
+	7844 4478 5048 4400 ( R )
+	3c40 4038 0404 7800 ( S )
+	7c10 1010 1010 1000 ( T )
+	4444 4444 4444 3800 ( U )
+	4444 4444 4428 1000 ( V )
+	4444 4454 546c 4400 ( W )
+	4444 2810 2844 4400 ( X )
+	4444 2810 1010 1000 ( Y )
+	7c04 0810 2040 7c00 ( Z )
+	3820 2020 2020 3800 ( [ )
+	4040 2010 0804 0400 ( \ )
+	3808 0808 0808 3800 ( ] )
+	0000 0000 0000 0000 ( ^ )
+	0000 0000 0000 0000 ( _ )
+@periods
+	0fff 0fff 0fff 0fff 0fff 0fff 0fff 0fff 0fff 0fbe 0edc 0e07 ( octave 0 )
+	0d3d 0c7f 0bcb 0b22 0a82 09eb 095d 08d6 0857 07df 076e 0703 ( octave 1 )
+	069f 063f 05e6 0591 0541 04f6 04ae 046b 042c 03f0 03b7 0382 ( octave 2 )
+	034f 0320 02f3 02c8 02a1 027b 0257 0236 0216 01f8 01dc 01c1 ( octave 3 )
+	01a8 0190 0179 0164 0150 013d 012c 011b 010b 00fc 00ee 00e0 ( octave 4 )
+	00d4 00c8 00bd 00b2 00a8 009f 0096 008d 0085 007e 0077 0070 ( octave 5 )
+	006a 0064 005e 0059 0054 004f 004b 0047 0043 003f 003b 0038 ( octave 6 )
+	0035 0032 002f 002d 002a 0028 0025 0023 0021 001f 001e 001c ( octave 7 )
+	001a 0019 0018 0016 0015 0014 0013 0012 0011 0010 000f 000e ( octave 8 )
+@semis 09 0b 00 02 04 05 07 ( A B C D E F G )
+@notenames "C-C#D-D#E-F-F#G-G#A-A#B-
+@tri64
+	04 0c 14 1c 24 2c 34 3c 44 4c 54 5c 64 6c 74 7c
+	84 8c 94 9c a4 ac b4 bc c4 cc d4 dc e4 ec f4 fc
+	fc f4 ec e4 dc d4 cc c4 bc b4 ac a4 9c 94 8c 84
+	7c 74 6c 64 5c 54 4c 44 3c 34 2c 24 1c 14 0c 04
+@saw64
+	02 06 0a 0e 12 16 1a 1e 22 26 2a 2e 32 36 3a 3e
+	42 46 4a 4e 52 56 5a 5e 62 66 6a 6e 72 76 7a 7e
+	82 86 8a 8e 92 96 9a 9e a2 a6 aa ae b2 b6 ba be
+	c2 c6 ca ce d2 d6 da de e2 e6 ea ee f2 f6 fa fe
+@sinhalf
+	00 0c 19 25 31 3c 47 51 5a 62 6a 70 75 7a 7d 7e
+	7f 7e 7d 7a 75 70 6a 62 5a 51 47 3c 31 25 19 0c
+@atk-ticks
+	0001 0001 0001 0001 0002 0003 0003 0004 0005 000c 0019 0028 0032 0096 00fa 0190
+@dec-ticks
+	0001 0001 0002 0004 0006 0008 000a 000c 000f 0026 004b 0078 0096 01c2 02ee 04b0
+@arptab
+	00 00 00 00 04 07 00 03 07 00 07 0c 00 05 09
+@sid-base
+	0000 0004 0001 0006 000a 0005 0200 0320 0008 0001 0000 0000 0002 0032 0000 0000 0000 0000 0000 0080 0003 0000 0000 ffff 0000
+@ifields ( param, max, step, big step )
+	01 0008 0001 0001 ( WAVE )
+	06 0fff 0040 0200 ( PULSE )
+	13 07ff 0010 0080 ( PWM DEPTH )
+	14 03e8 0001 000a ( PWM RATE )
+	02 000f 0001 0004 ( ATTACK )
+	03 000f 0001 0004 ( DECAY )
+	04 000f 0001 0004 ( SUSTAIN )
+	05 000f 0001 0004 ( RELEASE )
+	0e 03e8 0001 000a ( GATE )
+	18 0004 0001 0001 ( ARP )
+@ifnames =ifn0 =ifn1 =ifn2 =ifn3 =ifn4 =ifn5 =ifn6 =ifn7 =ifn8 =ifn9
+@ifn0 "WAVE 00
+@ifn1 "PULSE 00
+@ifn2 "PWM 20 "DEPTH 00
+@ifn3 "PWM 20 "RATE 00
+@ifn4 "ATTACK 00
+@ifn5 "DECAY 00
+@ifn6 "SUSTAIN 00
+@ifn7 "RELEASE 00
+@ifn8 "GATE 00
+@ifn9 "ARP 00
+@mitems =s-m0 =s-m1 =s-m2 =s-m3 =s-m4
+@presets ( name x10, then wave pulse depth rate A D S R gate arp )
+	50 55 4c 53 45 20 50 57 4d 00 0004 0600 0384 0019 0000 0006 000a 0005 0000 0000 ( PULSE PWM )
+	53 41 57 20 4c 45 41 44 00 00 0002 0800 0000 0000 0000 0009 000c 0006 0000 0000 ( SAW LEAD )
+	54 52 49 20 42 41 53 53 00 00 0001 0800 0000 0000 0000 0008 000f 0004 0000 0000 ( TRI BASS )
+	4e 4f 49 53 45 20 48 41 54 00 0008 0800 0000 0000 0000 0003 0000 0003 0003 0000 ( NOISE HAT )
+	50 4c 55 43 4b 00 00 00 00 00 0004 0200 0000 0000 0000 0007 0000 0004 0000 0000 ( PLUCK )
+	50 41 44 00 00 00 00 00 00 00 0002 0800 0000 0000 0009 0008 000c 0009 0000 0000 ( PAD )
+	41 52 50 20 50 55 4c 53 45 00 0004 0400 0190 0028 0000 0006 0009 0004 0000 0001 ( ARP PULSE )
+@draw-help
+	#01 ;col STA
+	#1d #04 ;at JSR2
+	;draw-help0 ;put-str JSR2
+	#1d #05 ;at JSR2
+	;draw-help1 ;put-str JSR2
+	#1d #06 ;at JSR2
+	;layout LDA ;&q JCN2 ;s-row-az ;&p JMP2 &q ;s-row-qw &p ;put-str JSR2
+	#1d #07 ;at JSR2
+	;draw-help3 ;put-str JSR2
+	#1d #08 ;at JSR2
+	;draw-help4 ;put-str JSR2
+	#1d #09 ;at JSR2
+	;draw-help5 ;put-str JSR2
+	#1d #0a ;at JSR2
+	;draw-help6 ;put-str JSR2
+	#1d #0b ;at JSR2
+	;draw-help7 ;put-str JSR2
+	#1d #0c ;at JSR2
+	;draw-help8 ;put-str JSR2
+	#1d #0d ;at JSR2
+	;draw-help9 ;put-str JSR2
+	#1d #0e ;at JSR2
+	;draw-help10 ;put-str JSR2
+	#1d #0f ;at JSR2
+	;draw-help11 ;put-str JSR2
+	#1d #10 ;at JSR2
+	;draw-help12 ;put-str JSR2
+	#1d #11 ;at JSR2
+	;draw-help13 ;put-str JSR2
+	#1d #12 ;at JSR2
+	;draw-help14 ;put-str JSR2
+JMP2r
+@draw-help0 "ARROWS 20 "MOVE 00
+@draw-help1 "NOTE 20 "KEYS: 00
+@draw-help3 "-/= 20 "OCTAVE 00
+@draw-help4 "SHIFT+U/D 20 "OCTAVE 00
+@draw-help5 "SHIFT+L/R 20 "INST 00
+@draw-help6 "' 20 "NOTE 20 "OFF 00
+@draw-help7 "BKSP 20 "CLEAR 00
+@draw-help8 "SPACE 20 "PLAY 00
+@draw-help9 "CTRL+L/R 20 "SONG 00
+@draw-help10 "CTRL+U/D 20 "TEMPO 00
+@draw-help11 "CTRL+BKSP 20 "DEL 00
+@draw-help12 "; 20 "LAYOUT 00
+@draw-help13 "TAB 20 "INSTRUMENTS 00
+@draw-help14 "ENTER 20 "FILE 20 "MENU 00
+@draw-ihelp
+	#01 ;col STA
+	#02 #12 ;at JSR2
+	;draw-ihelp0 ;put-str JSR2
+	#02 #13 ;at JSR2
+	;draw-ihelp1 ;put-str JSR2
+	#02 #14 ;at JSR2
+	;draw-ihelp2 ;put-str JSR2
+	#02 #15 ;at JSR2
+	;draw-ihelp3 ;put-str JSR2
+	#02 #16 ;at JSR2
+	;draw-ihelp4 ;put-str JSR2
+	#02 #17 ;at JSR2
+	;draw-ihelp5 ;put-str JSR2
+JMP2r
+@draw-ihelp0 "UP/DOWN 20 "FIELD 00
+@draw-ihelp1 "LEFT/RIGHT 20 "VALUE 00
+@draw-ihelp2 "CTRL+L/R 20 "BIG 20 "STEP 00
+@draw-ihelp3 "SHIFT+L/R 20 "INSTRUMENT 00
+@draw-ihelp4 "NOTE 20 "KEYS 20 "PREVIEW 00
+@draw-ihelp5 "TAB 20 "BACK 20 "TO 20 "PATTERN 00
+@s-title "UXN 20 "TRACKER 00
+@s-play "PLAY 00
+@s-stop "STOP 00
+@s-song "SONG 20 00
+@s-spd "SPD 20 00
+@s-oct "OCT 20 00
+@s-ins "INS 20 00
+@s-keys "KEYS 20 00
+@s-azerty "AZERTY 00
+@s-qwerty "QWERTY 00
+@s-none "--- 00
+@s-off "OFF 00
+@s-row-az "WSXDCVGBHNJ, 00
+@s-row-qw "ZSXDCVGBHNJM 00
+@s-saved "SAVED 00
+@s-save-err "SAVE 20 "ERROR 00
+@s-loaded "LOADED 00
+@s-load-err "LOAD 20 "ERROR 00
+@s-newsong "NEW 20 "SONG 00
+@s-h-song "## 20 "Song 00
+@s-h-chains "## 20 "Chains 00
+@s-h-phr "## 20 "Phrases 00
+@s-h-groove "## 20 "Grooves 00
+@s-h-inst "## 20 "Instruments 00
+@s-h-any "## 20 00
+@s-h-chain "### 20 "Chain 20 00
+@s-h-phrase "### 20 "Phrase 20 00
+@s-h-groove1 "### 20 "Groove 20 00
+@s-h-inst1 "### 20 "Instrument 20 00
+@s-p-type "- 20 "Type: 20 00
+@s-p-sidp "- 20 "SID 20 "parameters: 20 00
+@s-p-sidn "- 20 "SID 20 "name: 20 00
+@s-p-sidi "- 20 "SID 20 "identity: 20 00
+@s-defname "song.cct 00
+@s-square "SQUARE 00
+@s-m0 "NAME 20 00
+@s-m1 "SAVE 00
+@s-m2 "LOAD 00
+@s-m3 "NEW 20 "SONG 00
+@s-m4 "CLOSE 00
+@s-menu "FILE 00
+@s-unsaved "UNSAVED 20 "CHANGES 00
+@s-c1 "FILE 20 "EXISTS. 20 "OVERWRITE? 20 "Y/N 00
+@s-c2 "LOAD: 20 "DISCARD 20 "UNSAVED 20 "WORK? 20 "Y/N 00
+@s-c3 "NEW: 20 "DISCARD 20 "UNSAVED 20 "WORK? 20 "Y/N 00
+@s-mhint "UP/DOWN 20 "SELECT 20 20 20 "ENTER 20 "OK 20 20 20 "ESC 20 "BACK 00
+@s-ay-note "AY 20 "SQUARE: 20 "NO 20 "PARAMETERS 00
+@s-inst-h "INSTRUMENT 20 00
+@t-head
+	"# 20 "ChooChooTracker 20 "Module 20 "11.0 0a
+	0a
+	"- 20 "Title: 20 "uxn 20 "tracker 0a
+	"- 20 "Author: 20 0a
+	"- 20 "Frame 20 "rate: 20 "50.000000 0a
+	"- 20 "Chips 20 "count: 20 "4 0a
+	"- 20 "Track 20 "inserts: 20 "1,8,2 0a
+	"- 20 "Insert: 20 "0,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "0,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "1,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "1,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "2,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "2,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "3,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "3,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "4,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "4,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "5,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "5,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "6,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "6,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "7,0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Insert: 20 "7,1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Master 20 "inserts: 20 "1,2 0a
+	"- 20 "Master 20 "insert: 20 "0,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Master 20 "insert: 20 "1,0,0,0,0,0,0,0,0,0,0 0a
+	"- 20 "Track 20 "volumes: 20 "100,100,100,100,100,100,100,100 0a
+	"- 20 "Track 20 "pans: 20 "128,128,128,128,128,128,128,128 0a
+	"- 20 "Reverb 20 "sends: 20 "0,0,0,0,0,0,0,0 0a
+	"- 20 "Delay 20 "sends: 20 "0,0,0,0,0,0,0,0 0a
+	"- 20 "Track 20 "tilts: 20 "128,128,128,128,128,128,128,128 0a
+	"- 20 "Reverb: 20 "100,180,160,16000,150,0,180,153,150 0a
+	"- 20 "Delay: 20 "100,0,9,50,12000,0,2,6,160,25,25 0a
+	"- 20 "Tilt 20 "pivot: 20 "1000 0a
+	"- 20 "MIDI 20 "CC 20 "mappings: 20 "32 0a
+	"- 20 "MIDI 20 "CC: 20 "0,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "1,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "2,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "3,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "4,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "5,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "6,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "7,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "8,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "9,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "10,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "11,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "12,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "13,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "14,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "15,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "16,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "17,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "18,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "19,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "20,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "21,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "22,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "23,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "24,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "25,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "26,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "27,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "28,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "29,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "30,1,0,0,0,0 0a
+	"- 20 "MIDI 20 "CC: 20 "31,1,0,0,0,0 0a
+	"- 20 "Linear 20 "pitch: 20 "0 0a
+	"- 20 "Signed 20 "track 20 "speed: 20 "1 0a
+	"- 20 "Perceptual 20 "effects: 20 "1 0a
+	"- 20 "Scale: 20 "1,0,0,0,4095,255 0a
+	"- 20 "Chip 20 "type: 20 "AY8910 0a
+	"- 20 "*AY8910* 20 "Clock: 20 "1773400 0a
+	"- 20 "*AY8910* 20 "AY/YM: 20 "0 0a
+	"- 20 "*AY8910* 20 "Stereo: 20 "ABC 0a
+	"- 20 "*AY8910* 20 "Stereo 20 "separation: 20 "50 0a
+	"- 20 "*AY8910* 20 "PWM 20 "range: 20 "0 0a
+	0a
+	"## 20 "Pitch 20 "table 0a
+	0a
+	"- 20 "Title: 20 "12TET 20 "1773400Hz 0a
+	0a
+	"``` 0a
+	00
+@t-song
+	"``` 0a
+	0a
+	"## 20 "Song 0a
+	0a
+	"``` 0a
+	00
+@t-chains
+	"``` 0a
+	0a
+	"## 20 "Chains 0a
+	00
+@t-chain-h
+	0a
+	"### 20 "Chain 20
+	00
+@t-fence-open
+	0a
+	0a
+	"``` 0a
+	00
+@t-chain-r0
+	20 "00 0a
+	00
+@t-chain-rest
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"--- 20 "00 0a
+	"``` 0a
+	00
+@t-groove-h
+	0a
+	"## 20 "Grooves 0a
+	0a
+	"### 20 "Groove 20 "0 0a
+	0a
+	"``` 0a
+	00
+@t-groove-rest
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"-- 0a
+	"``` 0a
+	00
+@t-phrases
+	0a
+	"## 20 "Phrases 0a
+	0a
+	00
+@t-phrase-h
+	"### 20 "Phrase 20
+	00
+@t-inst-on
+	20 "00
+	00
+@t-inst-off
+	20 "--
+	00
+@t-row-tail
+	20 "-- 20 "--- 20 "00 20 "--- 20 "00 20 "--- 20 "00 0a
+	00
+@t-fence-close
+	"``` 0a
+	00
+@t-insts-h
+	0a
+	"## 20 "Instruments 0a
+	00
+@t-inst-h
+	0a
+	"### 20 "Instrument 20
+	00
+@t-nn
+	0a
+	0a
+	00
+@t-ay-body
+	"- 20 "Name: 20 "Square 0a
+	"- 20 "Type: 20 "1 0a
+	"- 20 "Table 20 "speed: 20 "1 0a
+	"- 20 "Volume: 20 "255 0a
+	"- 20 "Pan: 20 "128 0a
+	"- 20 "Transpose: 20 "1 0a
+	"- 20 "Modulation: 0a
+	"- 20 "Mod1: 20 "0,0,0,0,0,0,0,0 0a
+	"- 20 "Mod2: 20 "1,0,0,0,0,0,0,0 0a
+	"- 20 "Mod3: 20 "2,0,0,0,0,0,0,0 0a
+	"- 20 "Mod4: 20 "2,0,0,0,0,0,0,0 0a
+	"- 20 "Chip 20 "data: 0a
+	"- 20 "Volume 20 "envelope: 20 "0,0,15,0 0a
+	"- 20 "Auto 20 "envelope: 20 "0,0 0a
+	"- 20 "Default 20 "mixer: 20 "01 0a
+	00
+@t-sid-1
+	"- 20 "Name: 20
+	00
+@t-sid-2
+	0a
+	"- 20 "Type: 20 "27 0a
+	"- 20 "Table 20 "speed: 20 "1 0a
+	"- 20 "Volume: 20 "255 0a
+	"- 20 "Pan: 20 "128 0a
+	"- 20 "Transpose: 20 "1 0a
+	"- 20 "Modulation: 0a
+	"- 20 "Mod1: 20 "0,0,0,0,0,0,0,0 0a
+	"- 20 "Mod2: 20 "1,0,0,0,0,0,0,0 0a
+	"- 20 "Mod3: 20 "2,0,0,0,0,0,0,0 0a
+	"- 20 "Mod4: 20 "2,0,0,0,0,0,0,0 0a
+	"- 20 "Chip 20 "data: 0a
+	"- 20 "SID 20 "identity: 20 "1,
+	00
+@t-sid-3
+	0a
+	"- 20 "SID 20 "name: 20
+	00
+@t-sid-4
+	0a
+	"- 20 "SID 20 "parameters: 20
+	00
+@t-tail
+	0a
+	"## 20 "Tables 0a
+	"EOF 0a
+	00
+@t-dd
+	"--
+	00
+( ==== END GENERATED ==== )
