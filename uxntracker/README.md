@@ -21,21 +21,42 @@ L'écran fait 384x240. Le ROM tient en 15 Ko.
 Le morceau est une liste de **motifs** (jusqu'à 32), chacun de 16 lignes sur 4 voix.
 Le tempo est un nombre de ticks à 50 Hz par ligne (comme CCT, 06 par défaut).
 
-| Touche | Action |
+Deux manières de jouer : la **manette** (croix, A, B, Select, Start, à la LSDJ) et le **clavier**
+(mode jazz, comme dans CCT). Au clavier, Ctrl = A, Alt = B, Maj = Select, Home = Start.
+
+| Manette | Action |
 |---|---|
-| Flèches | déplacer le curseur (voix / ligne) |
-| rangée de touches de piano | poser une note (et la jouer), puis descendre d'une ligne |
-| `-` / `=`, ou Maj + haut / bas | octave -1 / +1 (0 à 7) |
-| Maj + gauche / droite | instrument précédent / suivant (0 à 7) |
-| Tab | bascule grille / éditeur d'instrument |
-| `'` | note OFF (coupe la voix), puis descendre d'une ligne |
+| croix | déplacer le curseur |
+| A | case vide : pose la dernière note ; case pleine : la rejoue |
+| A + haut / bas | note +1 / -1 demi-ton |
+| A + gauche / droite | note -1 / +1 octave |
+| B | efface la case |
+| A + B (B tenu, puis A) | note OFF |
+| B + haut / bas | tempo +1 / -1 (ticks par ligne) |
+| B + gauche / droite | instrument précédent / suivant (0 à 7) |
+| Select + gauche / droite | motif précédent / suivant (à la fin, ajoute un motif vide) |
+| Select + bas / haut | écran suivant / précédent : grille, instruments, menu fichier |
+| Start | lecture / arrêt |
+
+Dans l'écran instruments : haut / bas choisit le champ, gauche / droite change la valeur, A + gauche / droite
+fait un grand pas. Dans le menu fichier : haut / bas, A valide, B ferme (ou répond non), Select + haut ferme.
+
+| Clavier | Action |
+|---|---|
+| Échap | mode jazz on / off (indicateur `JAZZ`) : seul ce mode active les touches de piano |
+| rangée de touches de piano (jazz) | poser une note (et la jouer), puis descendre d'une ligne |
+| `[` `]` ou `-` `=` | octave -1 / +1 (0 à 7), utilisée par le mode jazz |
+| `'` | note OFF, puis descendre d'une ligne |
 | Retour arrière / Suppr | effacer la case |
 | Espace ou Home | lecture / arrêt (depuis le haut du motif courant) |
-| Ctrl + gauche / droite | motif précédent / suivant (à la fin, ajoute un motif vide) |
-| Ctrl + haut / bas | tempo +1 / -1 (ticks par ligne) |
 | Ctrl + retour arrière | supprimer le motif courant |
 | `;` | disposition clavier AZERTY / QWERTY |
-| Entrée ou Échap | menu fichier (voir plus bas) |
+| Tab | bascule grille / éditeur d'instrument |
+| Entrée | menu fichier (voir plus bas) |
+
+La note posée par A et le mode jazz utilisent l'instrument sélectionné (`INS`). Dans l'écran instruments,
+les touches de piano écoutent le son sans écrire, même hors jazz. Nommer le fichier demande un clavier ;
+sans clavier, `song.cct` est le nom par défaut.
 
 Pendant la lecture l'affichage suit le morceau ; on peut éditer en jouant.
 
@@ -51,8 +72,8 @@ En AZERTY les dièses de la rangée du haut ne sont pas des touches ASCII sans M
 
 ## Menu fichier
 
-Entrée ou Échap ouvre le menu : **NAME** (nom du fichier, modifiable : a-z, 0-9, `.`, `_`, `-`, 15 caractères),
-**SAVE**, **LOAD**, **NEW SONG**, **CLOSE**. Haut / bas pour choisir, Entrée pour valider, Échap pour fermer.
+Entrée (ou Select + bas depuis l'écran instruments) ouvre le menu : **NAME** (nom du fichier, modifiable : a-z, 0-9, `.`, `_`, `-`, 15 caractères),
+**SAVE**, **LOAD**, **NEW SONG**, **CLOSE**. Haut / bas pour choisir, Entrée (ou A) pour valider, Échap (ou B) pour fermer.
 Plus aucune touche ne charge ou n'enregistre directement. Un `*` à côté du titre indique des modifications
 non enregistrées ; LOAD et NEW demandent alors confirmation (Y / N), et SAVE demande confirmation si le
 fichier existe déjà.

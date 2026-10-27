@@ -217,29 +217,29 @@ TEXTS = [
 
 # --------------------------------------------------- chaines de l'interface
 HELP = [
-    "ARROWS MOVE",
-    "NOTE KEYS:",
-    None,                   # rangee de touches selon la disposition
-    "-/= OCTAVE",
-    "SHIFT+U/D OCTAVE",
-    "SHIFT+L/R INST",
-    "' NOTE OFF",
-    "BKSP CLEAR",
-    "SPACE PLAY",
-    "CTRL+L/R SONG",
-    "CTRL+U/D TEMPO",
-    "CTRL+BKSP DEL",
-    "; LAYOUT",
+    "A PLACE / PLAY",
+    "A+ARROWS EDIT NOTE",
+    "B CLEAR  A+B OFF",
+    "B+U/D TEMPO",
+    "B+L/R INSTRUMENT",
+    "SEL+L/R PATTERN",
+    "SEL+D/U SCREENS",
+    "START PLAY",
+    "ESC JAZZ PIANO KEYS",
+    None,                   # rangee de touches selon la disposition (jazz)
+    "[ ] OR -/= OCTAVE",
     "TAB INSTRUMENTS",
     "ENTER FILE MENU",
+    "CTRL=A ALT=B",
+    "SHF=SEL HOME=START",
 ]
 IHELP = [
     "UP/DOWN FIELD",
     "LEFT/RIGHT VALUE",
-    "CTRL+L/R BIG STEP",
-    "SHIFT+L/R INSTRUMENT",
+    "A+L/R BIG STEP",
+    "B+L/R INSTRUMENT",
     "NOTE KEYS PREVIEW",
-    "TAB BACK TO PATTERN",
+    "SEL+UP BACK",
 ]
 UI = [
     ("s-title", "UXN TRACKER"),
@@ -249,6 +249,7 @@ UI = [
     ("s-spd", "SPD "),
     ("s-oct", "OCT "),
     ("s-ins", "INS "),
+    ("s-jazz", "JAZZ"),
     ("s-keys", "KEYS "),
     ("s-azerty", "AZERTY"),
     ("s-qwerty", "QWERTY"),

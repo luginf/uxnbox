@@ -15,7 +15,7 @@
 |a0 @File &vector $2 &success $2 &stat $2 &delete $1 &append $1 &name $2 &length $2 &read $2 &write $2
 
 ( ==== memoire de travail, apres le code ==== )
-|4000
+|6000
 @pat        $1000   ( 32 motifs x 16 lignes x 4 voix x (note, instrument) ; ff = vide, fe = OFF )
 @phr        $4000   ( chargement : 512 phrases x 16 lignes x 2 octets )
 @songtmp    $80     ( chargement : 32 lignes de song x 4 chaines )
@@ -34,7 +34,7 @@
 @view $1 @menu $1 @msel $1 @mconf $1 @modified $1 @nlen $1
 @playing $1 @psong $1 @prow $1 @ptick $1 @tacc $1 @hl-song $1 @hl-row $1
 @dirty $1 @mode $1 @col $1 @msg $2
-@bnow $1 @bprev $1 @bedge $1 @key $1
+@bnow $1 @bprev $1 @bedge $1 @brel $1 @key $1 @jazz $1 @lastnote $1 @bused $1 @dirn $1
 @cx $2 @cy $2
 @tv $1 @gr $1 @gv $1 @hlf $1 @tn2 $1 @ti2 $1
 @opos $2 @pi $1 @ss $1 @sv $1 @sr $1 @cid $2 @dn $2 @ddiv $2 @dz $1
@@ -54,6 +54,7 @@
 ( ==== reset ==== )
 |0100
 @on-reset
+	#30 ;lastnote STA
 	#1d4f .System/r DEO2
 	#1dbb .System/g DEO2
 	#2ef3 .System/b DEO2
@@ -480,6 +481,7 @@ JMP2r
 @on-controller
 	.Controller/button DEI DUP ;bnow STA
 	DUP ;bprev LDA #ff EOR AND ;bedge STA
+	;bprev LDA OVR #ff EOR AND ;brel STA
 	;bprev STA
 	.Controller/key DEI ;key STA
 	;key LDA ;&k JCN2
@@ -494,67 +496,147 @@ BRK
 	&m ;menu-key JSR2 #01 ;dirty STA
 BRK
 
+( ---- manette : A=01 B=02 Select=04 Start=08 ; Ctrl=A, Alt=B, Shift=Select, Home=Start au clavier ---- )
 @do-buttons
 	;menu LDA ;&m JCN2
 	;bedge LDA #08 AND #00 EQU ;&n0 JCN2 ;k-play JSR2 &n0
-	;bedge LDA #10 AND #00 EQU ;&n1 JCN2 ;b-up JSR2 &n1
-	;bedge LDA #20 AND #00 EQU ;&n2 JCN2 ;b-down JSR2 &n2
-	;bedge LDA #40 AND #00 EQU ;&n3 JCN2 ;b-left JSR2 &n3
-	;bedge LDA #80 AND #00 EQU ;&n4 JCN2 ;b-right JSR2 &n4
+	;bedge LDA #02 AND #00 EQU ;&nb JCN2 #00 ;bused STA &nb
+	;bedge LDA #01 AND #00 EQU ;&na JCN2 ;a-press JSR2 &na
+	;bedge LDA #10 AND #00 EQU ;&n1 JCN2 #00 ;do-dir JSR2 &n1
+	;bedge LDA #20 AND #00 EQU ;&n2 JCN2 #01 ;do-dir JSR2 &n2
+	;bedge LDA #40 AND #00 EQU ;&n3 JCN2 #02 ;do-dir JSR2 &n3
+	;bedge LDA #80 AND #00 EQU ;&n4 JCN2 #03 ;do-dir JSR2 &n4
+	;brel LDA #02 AND #00 EQU ;&nr JCN2 ;b-release JSR2 &nr
+	#01 ;dirty STA
 JMP2r
-	&m ;menu-buttons JMP2
+	&m ;menu-buttons JSR2 #01 ;dirty STA
+JMP2r
+
+( d -- : 0 haut 1 bas 2 gauche 3 droite ; le modificateur tenu choisit la fonction )
+@do-dir
+	;dirn STA
+	;bnow LDA #04 AND ;&ls JCN2
+	;bnow LDA #02 AND ;&lb JCN2
+	;bnow LDA #01 AND ;&la JCN2
+	;plain-dir JMP2
+	&ls ;sel-dir JMP2
+	&lb #01 ;bused STA ;b-dir JMP2
+	&la ;a-dir JMP2
+
+@plain-dir
+	;dirn LDA #00 EQU ;b-up JCN2
+	;dirn LDA #01 EQU ;b-down JCN2
+	;dirn LDA #02 EQU ;b-left JCN2
+	;b-right JMP2
+
+@sel-dir
+	;dirn LDA #02 EQU ;song-prev JCN2
+	;dirn LDA #03 EQU ;song-next JCN2
+	;dirn LDA #01 EQU ;screen-down JCN2
+	#00 ;view STA
+JMP2r
+
+@screen-down
+	;view LDA ;&m JCN2
+	#01 ;view STA
+JMP2r
+	&m ;k-menu JMP2
+
+@b-dir
+	;dirn LDA #00 EQU ;tempo-up JCN2
+	;dirn LDA #01 EQU ;tempo-dn JCN2
+	;dirn LDA #02 EQU ;inst-prev JCN2
+	;inst-next JMP2
+
+@tempo-up
+	;spd LDA #20 LTH ;&i JCN2
+JMP2r
+	&i ;spd LDA INC ;spd STA #01 ;modified STA
+JMP2r
+@tempo-dn
+	;spd LDA #01 GTH ;&d JCN2
+JMP2r
+	&d ;spd LDA #01 SUB ;spd STA #01 ;modified STA
+JMP2r
+
+( note sous le curseur, ou la derniere note posee si la case est vide ou OFF )
+@cell-note
+	;cur-s LDA ;cur-r LDA ;cur-v LDA ;cell-addr JSR2 LDA
+	DUP #fe LTH ;&k JCN2
+	POP ;lastnote LDA
+	&k
+JMP2r
+
+( n -- : joue la note sur la voix du curseur )
+@play-here
+	;cur-v LDA SWP ;cur-inst LDA ;trigger JMP2
+
+( A seul : pose la derniere note dans une case vide, ou rejoue la note ; A avec B : OFF )
+@a-press
+	;view LDA ;&r JCN2
+	;bnow LDA #02 AND ;&off JCN2
+	;cur-s LDA ;cur-r LDA ;cur-v LDA ;cell-addr JSR2 LDA #fe LTH ;&have JCN2
+	;lastnote LDA DUP ;set-cell JSR2 ;play-here JMP2
+	&have ;cell-note JSR2 ;play-here JMP2
+	&off #01 ;bused STA #fe ;set-cell JMP2
+	&r
+JMP2r
+
+( A tenu + croix : haut/bas = demi-ton, gauche/droite = octave ; dans l'ecran instrument : valeur )
+@a-dir
+	;view LDA ;&iv JCN2
+	;cell-note JSR2 #00 SWP
+	;dirn LDA #00 SWP DUP2 ADD2 ;deltas ADD2 LDA2 ADD2
+	DUP2 #006c LTH2 ;&in JCN2
+	POP2
+JMP2r
+	&in NIP DUP ;lastnote STA DUP ;set-cell JSR2 ;play-here JMP2
+	&iv ;plain-dir JMP2
+@deltas 0001 ffff fff4 000c
+
+( B seul, relache sans avoir servi de modificateur : efface la case )
+@b-release
+	;bused LDA ;&r JCN2
+	;view LDA ;&r JCN2
+	#ff ;set-cell JMP2
+	&r
+JMP2r
 
 @b-up
 	;view LDA ;&iv JCN2
-	;bnow LDA #04 AND ;k-octup JCN2
-	;bnow LDA #01 AND ;&sp JCN2
 	;cur-r LDA ;&dec JCN2
 JMP2r
-	&dec ;cur-r LDA #01 SUB ;cur-r STA #01 ;dirty STA
-JMP2r
-	&sp ;spd LDA #20 LTH ;&inc JCN2
-JMP2r
-	&inc ;spd LDA INC ;spd STA #01 ;modified STA #01 ;dirty STA
+	&dec ;cur-r LDA #01 SUB ;cur-r STA
 JMP2r
 	&iv ;ifield LDA ;&idec JCN2
 JMP2r
-	&idec ;ifield LDA #01 SUB ;ifield STA #01 ;dirty STA
+	&idec ;ifield LDA #01 SUB ;ifield STA
 JMP2r
 
 @b-down
 	;view LDA ;&iv JCN2
-	;bnow LDA #04 AND ;k-octdn JCN2
-	;bnow LDA #01 AND ;&sp JCN2
 	;cur-r LDA #0f LTH ;&inc JCN2
 JMP2r
-	&inc ;cur-r LDA INC ;cur-r STA #01 ;dirty STA
-JMP2r
-	&sp ;spd LDA #01 GTH ;&dec JCN2
-JMP2r
-	&dec ;spd LDA #01 SUB ;spd STA #01 ;modified STA #01 ;dirty STA
+	&inc ;cur-r LDA INC ;cur-r STA
 JMP2r
 	&iv ;ifield LDA #09 LTH ;&iinc JCN2
 JMP2r
-	&iinc ;ifield LDA INC ;ifield STA #01 ;dirty STA
+	&iinc ;ifield LDA INC ;ifield STA
 JMP2r
 
 @b-left
-	;bnow LDA #04 AND ;inst-prev JCN2
 	;view LDA ;&iv JCN2
-	;bnow LDA #01 AND ;song-prev JCN2
 	;cur-v LDA ;&dec JCN2
 JMP2r
-	&dec ;cur-v LDA #01 SUB ;cur-v STA #01 ;dirty STA
+	&dec ;cur-v LDA #01 SUB ;cur-v STA
 JMP2r
 	&iv #00 ;iedit JMP2
 
 @b-right
-	;bnow LDA #04 AND ;inst-next JCN2
 	;view LDA ;&iv JCN2
-	;bnow LDA #01 AND ;song-next JCN2
 	;cur-v LDA #03 LTH ;&inc JCN2
 JMP2r
-	&inc ;cur-v LDA INC ;cur-v STA #01 ;dirty STA
+	&inc ;cur-v LDA INC ;cur-v STA
 JMP2r
 	&iv #01 ;iedit JMP2
 
@@ -602,7 +684,9 @@ JMP2r
 @keytab
 	20 =k-play
 	0d =k-menu
-	1b =k-menu
+	1b =k-jazz
+	5b =k-octdn
+	5d =k-octup
 	09 =k-view
 	08 =k-clear
 	7f =k-clear
@@ -630,6 +714,8 @@ JMP2r
 JMP2r
 @k-view ;view LDA #01 EOR ;view STA
 JMP2r
+@k-jazz ;jazz LDA #01 EOR ;jazz STA
+JMP2r
 @k-menu #01 ;menu STA #01 ;msel STA #00 ;mconf STA
 JMP2r
 
@@ -653,6 +739,9 @@ JMP2r
 
 ( touche -> note : deux rangees de 12 touches selon la disposition clavier )
 @piano-key
+	;jazz LDA ;view LDA ORA ;&go JCN2
+JMP2r
+	&go
 	;key LDA
 	DUP #40 GTH OVR #5b LTH AND #00 EQU ;&nu JCN2
 	#20 ORA
@@ -723,10 +812,18 @@ JMP2r
 
 ( ==== menu fichier ==== )
 @menu-buttons
-	;mconf LDA ;&r JCN2
+	;mconf LDA ;&cf JCN2
+	;bnow LDA #04 AND ;&sel JCN2
 	;bedge LDA #10 AND #00 EQU ;&n1 JCN2 ;m-up JSR2 &n1
 	;bedge LDA #20 AND #00 EQU ;&n2 JCN2 ;m-down JSR2 &n2
-	&r
+	;bedge LDA #01 AND #00 EQU ;&n3 JCN2 ;msel LDA ;menu-act JSR2 &n3
+	;bedge LDA #02 AND #00 EQU ;&n4 JCN2 #00 ;menu STA &n4
+JMP2r
+	&sel ;bedge LDA #10 AND #00 EQU ;&n5 JCN2 #00 ;menu STA &n5
+JMP2r
+	&cf
+	;bedge LDA #01 AND #00 EQU ;&n6 JCN2 ;do-confirmed JSR2 &n6
+	;bedge LDA #02 AND #00 EQU ;&n7 JCN2 #00 ;mconf STA &n7
 JMP2r
 
 @m-up ;msel LDA ;&d JCN2
@@ -1480,7 +1577,10 @@ JMP2r
 	;layout LDA ;&q JCN2
 	;s-azerty ;&k JMP2
 	&q ;s-qwerty
-	&k ;put-str JMP2
+	&k ;put-str JSR2
+	;jazz LDA ;&jz JCN2
+JMP2r
+	&jz #02 ;col STA #0e #02 ;at JSR2 ;s-jazz ;put-str JMP2
 
 @draw-grid
 	#00 ;gr STA
@@ -1734,7 +1834,7 @@ JMP2r
 	#1d #05 ;at JSR2
 	;draw-help1 ;put-str JSR2
 	#1d #06 ;at JSR2
-	;layout LDA ;&q JCN2 ;s-row-az ;&p JMP2 &q ;s-row-qw &p ;put-str JSR2
+	;draw-help2 ;put-str JSR2
 	#1d #07 ;at JSR2
 	;draw-help3 ;put-str JSR2
 	#1d #08 ;at JSR2
@@ -1748,7 +1848,7 @@ JMP2r
 	#1d #0c ;at JSR2
 	;draw-help8 ;put-str JSR2
 	#1d #0d ;at JSR2
-	;draw-help9 ;put-str JSR2
+	;layout LDA ;&q JCN2 ;s-row-az ;&p JMP2 &q ;s-row-qw &p ;put-str JSR2
 	#1d #0e ;at JSR2
 	;draw-help10 ;put-str JSR2
 	#1d #0f ;at JSR2
@@ -1760,20 +1860,20 @@ JMP2r
 	#1d #12 ;at JSR2
 	;draw-help14 ;put-str JSR2
 JMP2r
-@draw-help0 "ARROWS 20 "MOVE 00
-@draw-help1 "NOTE 20 "KEYS: 00
-@draw-help3 "-/= 20 "OCTAVE 00
-@draw-help4 "SHIFT+U/D 20 "OCTAVE 00
-@draw-help5 "SHIFT+L/R 20 "INST 00
-@draw-help6 "' 20 "NOTE 20 "OFF 00
-@draw-help7 "BKSP 20 "CLEAR 00
-@draw-help8 "SPACE 20 "PLAY 00
-@draw-help9 "CTRL+L/R 20 "SONG 00
-@draw-help10 "CTRL+U/D 20 "TEMPO 00
-@draw-help11 "CTRL+BKSP 20 "DEL 00
-@draw-help12 "; 20 "LAYOUT 00
-@draw-help13 "TAB 20 "INSTRUMENTS 00
-@draw-help14 "ENTER 20 "FILE 20 "MENU 00
+@draw-help0 "A 20 "PLACE 20 "/ 20 "PLAY 00
+@draw-help1 "A+ARROWS 20 "EDIT 20 "NOTE 00
+@draw-help2 "B 20 "CLEAR 20 20 "A+B 20 "OFF 00
+@draw-help3 "B+U/D 20 "TEMPO 00
+@draw-help4 "B+L/R 20 "INSTRUMENT 00
+@draw-help5 "SEL+L/R 20 "PATTERN 00
+@draw-help6 "SEL+D/U 20 "SCREENS 00
+@draw-help7 "START 20 "PLAY 00
+@draw-help8 "ESC 20 "JAZZ 20 "PIANO 20 "KEYS 00
+@draw-help10 "[ 20 "] 20 "OR 20 "-/= 20 "OCTAVE 00
+@draw-help11 "TAB 20 "INSTRUMENTS 00
+@draw-help12 "ENTER 20 "FILE 20 "MENU 00
+@draw-help13 "CTRL=A 20 "ALT=B 00
+@draw-help14 "SHF=SEL 20 "HOME=START 00
 @draw-ihelp
 	#01 ;col STA
 	#02 #12 ;at JSR2
@@ -1791,10 +1891,10 @@ JMP2r
 JMP2r
 @draw-ihelp0 "UP/DOWN 20 "FIELD 00
 @draw-ihelp1 "LEFT/RIGHT 20 "VALUE 00
-@draw-ihelp2 "CTRL+L/R 20 "BIG 20 "STEP 00
-@draw-ihelp3 "SHIFT+L/R 20 "INSTRUMENT 00
+@draw-ihelp2 "A+L/R 20 "BIG 20 "STEP 00
+@draw-ihelp3 "B+L/R 20 "INSTRUMENT 00
 @draw-ihelp4 "NOTE 20 "KEYS 20 "PREVIEW 00
-@draw-ihelp5 "TAB 20 "BACK 20 "TO 20 "PATTERN 00
+@draw-ihelp5 "SEL+UP 20 "BACK 00
 @s-title "UXN 20 "TRACKER 00
 @s-play "PLAY 00
 @s-stop "STOP 00
@@ -1802,6 +1902,7 @@ JMP2r
 @s-spd "SPD 20 00
 @s-oct "OCT 20 00
 @s-ins "INS 20 00
+@s-jazz "JAZZ 00
 @s-keys "KEYS 20 00
 @s-azerty "AZERTY 00
 @s-qwerty "QWERTY 00
