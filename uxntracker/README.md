@@ -11,10 +11,12 @@ make run        # lance avec uxn2 en zoom x2 (song.cct est lu/écrit dans le dos
 make run11      # lance avec uxn11 (X11, sans audio : pour le son, utiliser uxn2)
 make test       # aller-retour sauvegarde / rechargement sous uxncli, sans écran
 make cct-check  # fait relire le fichier du test par le vrai chargeur de CCT (voir plus bas)
+make ds         # variante Nintendo DS : tracker-ds.rom, écran 256x192 (make run-ds pour l'essayer en x3)
 make data       # régénère police, table des périodes et textes du .cct (tools/gen_data.py)
 ```
 
-L'écran fait 384x240. Le ROM tient en 15 Ko.
+L'écran fait 384x240. Le ROM tient en 15 Ko. La variante DS (`tools/make_ds.py`) fait 256x192 : lignes de 8 px et
+sans le panneau d'aide, le reste est identique. Elle n'a été vue que sous uxn2, pas sur une vraie DS.
 
 ## Utilisation
 

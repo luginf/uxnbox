@@ -288,7 +288,7 @@ UI = [
     ("s-c1", "FILE EXISTS. OVERWRITE? Y/N"),
     ("s-c2", "LOAD: DISCARD UNSAVED WORK? Y/N"),
     ("s-c3", "NEW: DISCARD UNSAVED WORK? Y/N"),
-    ("s-mhint", "UP/DOWN SELECT   ENTER OK   ESC BACK"),
+    ("s-mhint", "A/ENTER OK  B/ESC BACK"),
     ("s-ay-note", "AY SQUARE: NO PARAMETERS"),
     ("s-inst-h", "INSTRUMENT "),
 ]

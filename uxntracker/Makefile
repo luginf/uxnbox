@@ -6,7 +6,7 @@ UXNCLI = ../uxncli
 ASM    = ../drifloon.rom
 WORK   = /tmp/uxntracker-test
 
-.PHONY: all run run11 data test cct-check clean
+.PHONY: all run run11 ds run-ds data test cct-check clean
 
 all: $(ROM)
 
@@ -18,6 +18,13 @@ run: $(ROM)
 
 run11: $(ROM)
 	$(UXN11) $(ROM)
+
+# variante Nintendo DS (256x192)
+ds: $(ROM) tools/make_ds.py
+	python3 tools/make_ds.py
+
+run-ds: ds
+	$(UXN2) -3x tracker-ds.rom
 
 # regenere police, table des periodes et textes du .cct dans tracker.tal
 data:
@@ -32,4 +39,4 @@ cct-check: test
 	sh tests/cct_check.sh $(WORK)/song.cct
 
 clean:
-	rm -f $(ROM)
+	rm -f $(ROM) tracker-ds.rom tracker-ds.tal
