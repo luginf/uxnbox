@@ -16,6 +16,7 @@ SUBS = [
     ("#00 SWP #000a MUL2 ;cy STA2", "#00 SWP #0008 MUL2 ;cy STA2"),
     ("\t;draw-help JSR2\n", ""),
     ("\t#1e #00 ;at JSR2", "\t#1b #00 ;at JSR2"),
+    ("#01 ;swapab STA", "#00 ;swapab STA"),
 ]
 
 src = (HERE / "tracker.tal").read_text()

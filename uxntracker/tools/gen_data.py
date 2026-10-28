@@ -217,13 +217,14 @@ TEXTS = [
 
 # --------------------------------------------------- chaines de l'interface
 HELP = [
-    "A PLACE / PLAY",
-    "A+ARROWS EDIT NOTE",
-    "B CLEAR  A+B OFF",
-    "B+U/D TEMPO",
+    "A PLACE / REPLAY",
+    "A+L/R NOTE +-1",
+    "A+U/D NOTE +-12",
+    "A+B CLEAR / OFF",
+    "B+U/D PATTERN",
     "B+L/R INSTRUMENT",
-    "SEL+L/R PATTERN",
-    "SEL+D/U SCREENS",
+    "SEL+L/R SCREENS",
+    "SEL+U/D TEMPO",
     "START PLAY",
     "ESC JAZZ PIANO KEYS",
     None,                   # rangee de touches selon la disposition (jazz)
@@ -235,11 +236,11 @@ HELP = [
 ]
 IHELP = [
     "UP/DOWN FIELD",
-    "LEFT/RIGHT VALUE",
-    "A+L/R BIG STEP",
+    "A+L/R VALUE FINE",
+    "A+U/D VALUE BIG",
+    "A+START PREVIEW",
     "B+L/R INSTRUMENT",
-    "NOTE KEYS PREVIEW",
-    "SEL+UP BACK",
+    "SEL+LEFT BACK",
 ]
 UI = [
     ("s-title", "UXN TRACKER"),
@@ -283,6 +284,8 @@ UI = [
     ("s-m2", "LOAD"),
     ("s-m3", "NEW SONG"),
     ("s-m4", "CLOSE"),
+    ("s-m5", "A/B SWAP "),
+    ("s-on", "ON"),
     ("s-menu", "FILE"),
     ("s-unsaved", "UNSAVED CHANGES"),
     ("s-c1", "FILE EXISTS. OVERWRITE? Y/N"),
@@ -367,7 +370,7 @@ def tables_block():
     out.append("@ifnames " + " ".join("=ifn%d" % i for i in range(len(FIELDS))))
     for i, f in enumerate(FIELDS):
         out.append(plain("ifn%d" % i, f[0]))
-    out.append("@mitems =s-m0 =s-m1 =s-m2 =s-m3 =s-m4")
+    out.append("@mitems =s-m0 =s-m1 =s-m2 =s-m3 =s-m4 =s-m5")
     out.append("@presets ( name x10, then wave pulse depth rate A D S R gate arp )")
     for (name, *vals) in PRESETS:
         assert len(name) <= 9

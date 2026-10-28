@@ -23,25 +23,37 @@ sans le panneau d'aide, le reste est identique. Elle n'a été vue que sous uxn2
 Le morceau est une liste de **motifs** (jusqu'à 32), chacun de 16 lignes sur 4 voix.
 Le tempo est un nombre de ticks à 50 Hz par ligne (comme CCT, 06 par défaut).
 
-Deux manières de jouer : la **manette** (croix, A, B, Select, Start, à la LSDJ) et le **clavier**
-(mode jazz, comme dans CCT). Au clavier, Ctrl = A, Alt = B, Maj = Select, Home = Start.
+Deux manières de jouer : la **manette** (croix, A, B, Select, Start) et le **clavier** (mode jazz).
+Les commandes de la manette suivent celles de [ChooChooTracker](https://github.com/luginf/Choochootracker/blob/main/docs/USER_MANUAL.md)
+(A = EDIT, B = OPT, Start = PLAY, Select = SELECT). Au clavier : Alt = A, Ctrl = B, Maj = Select, Home = Start
+(uxn ne voit pas les touches X et Z que CCT utilise par défaut).
 
-| Manette | Action |
-|---|---|
-| croix | déplacer le curseur |
-| A | case vide : pose la dernière note ; case pleine : la rejoue |
-| A + haut / bas | note +1 / -1 demi-ton |
-| A + gauche / droite | note -1 / +1 octave |
-| B | efface la case |
-| A + B (B tenu, puis A) | note OFF |
-| B + haut / bas | tempo +1 / -1 (ticks par ligne) |
-| B + gauche / droite | instrument précédent / suivant (0 à 7) |
-| Select + gauche / droite | motif précédent / suivant (à la fin, ajoute un motif vide) |
-| Select + bas / haut | écran suivant / précédent : grille, instruments, menu fichier |
-| Start | lecture / arrêt |
+**A et B échangés** : les émulateurs envoient Ctrl pour A et Alt pour B, mais A est à droite dans CCT et sur une
+manette. Le tracker échange donc les deux boutons (`tracker.rom` démarre ainsi, la touche `\` ou la ligne **A/B SWAP** du menu fichier bascule). Cet
+échange vaut pour tout ce qui arrive en entrée, y compris une vraie manette : la variante DS démarre sans échange.
 
-Dans l'écran instruments : haut / bas choisit le champ, gauche / droite change la valeur, A + gauche / droite
-fait un grand pas. Dans le menu fichier : haut / bas, A valide, B ferme (ou répond non), Select + haut ferme.
+| Manette | Action | Équivalent CCT |
+|---|---|---|
+| croix | déplacer le curseur | idem |
+| A (appui bref) | case vide : pose la dernière note ; case pleine : la rejoue | tap EDIT |
+| A + gauche / droite | note -1 / +1 demi-ton | EDIT + gauche / droite |
+| A + haut / bas | note +1 / -1 octave | EDIT + haut / bas |
+| A + B | case vide : note OFF ; sinon efface la case | EDIT + OPT |
+| B + haut / bas | motif précédent / suivant (à la fin, ajoute un motif vide) | OPT + haut / bas (phrase précédente / suivante) |
+| B + gauche / droite | instrument précédent / suivant (0 à 7) | OPT + gauche / droite (instrument, écran instrument) |
+| Select + gauche / droite | écran : projet (menu fichier) / grille / instruments | SELECT + direction |
+| Select + haut / bas | tempo +1 / -1 (ticks par ligne) | écran Groove (pas encore fait) |
+| Start | lecture / arrêt | PLAY |
+| A + Start (écran instruments) | écoute l'instrument | EDIT + PLAY |
+
+Dans l'écran instruments : haut / bas choisit le champ, A + gauche / droite change la valeur d'un pas fin,
+A + haut / bas d'un grand pas (comme EDIT sur une valeur dans CCT), les flèches seules ne changent rien.
+Dans le menu fichier : haut / bas, A valide, B ferme (ou répond non), Select + droite ferme.
+
+Différences avec CCT : une seule grille de 4 voix au lieu des écrans Song / Chain / Phrase ; pas de sélection
+ni de copier-coller par la manette ; la saisie d'un instrument se fait par B + gauche / droite (instrument
+courant) et non colonne par colonne ; le mode jazz n'a pas Insert, ni Ctrl+S, ni la suppression de ligne avec
+décalage (Retour arrière et Suppr effacent seulement la case).
 
 | Clavier | Action |
 |---|---|
@@ -51,7 +63,8 @@ fait un grand pas. Dans le menu fichier : haut / bas, A valide, B ferme (ou rép
 | `'` | note OFF, puis descendre d'une ligne |
 | Retour arrière / Suppr | effacer la case |
 | Espace ou Home | lecture / arrêt (depuis le haut du motif courant) |
-| Ctrl + retour arrière | supprimer le motif courant |
+| A + retour arrière (Alt au clavier) | supprimer le motif courant |
+| `\` | échange A et B (voir ci-dessous) |
 | `;` | disposition clavier AZERTY / QWERTY |
 | Tab | bascule grille / éditeur d'instrument |
 | Entrée | menu fichier (voir plus bas) |
@@ -81,8 +94,8 @@ qu'un bouton de tir) : la manette est émulée par le clavier de l'ST.
 | Bouton de la manette | Touche sur l'ST |
 |---|---|
 | croix | flèches |
-| A | Control |
-| B | Alt |
+| A | Control (Alt une fois les boutons échangés avec `\`) |
+| B | Alt (Control une fois échangés) |
 | Select | Shift (gauche ou droit) |
 | Start | Home |
 
@@ -93,7 +106,7 @@ Les touches de piano du mode jazz (Échap) et le nom de fichier se saisissent au
 
 ## Menu fichier
 
-Entrée (ou Select + bas depuis l'écran instruments) ouvre le menu : **NAME** (nom du fichier, modifiable : a-z, 0-9, `.`, `_`, `-`, 15 caractères),
+Entrée (ou Select + gauche depuis la grille) ouvre le menu : **NAME** (nom du fichier, modifiable : a-z, 0-9, `.`, `_`, `-`, 15 caractères),
 **SAVE**, **LOAD**, **NEW SONG**, **CLOSE**. Haut / bas pour choisir, Entrée (ou A) pour valider, Échap (ou B) pour fermer.
 Plus aucune touche ne charge ou n'enregistre directement. Un `*` à côté du titre indique des modifications
 non enregistrées ; LOAD et NEW demandent alors confirmation (Y / N), et SAVE demande confirmation si le
@@ -105,8 +118,8 @@ Chaque case porte une note et un numéro d'instrument (celui qui est sélectionn
 affiché `INS` en haut). L'instrument 0 est le carré AY (tenue). Les instruments 1 à 7 sont de type SID,
 modifiables dans la vue Tab : forme d'onde (triangle, dent de scie, impulsion, bruit, combinables par
 ET logique), largeur d'impulsion, modulation de largeur (profondeur, vitesse), enveloppe ADSR logicielle
-avec vrai niveau de sustain, durée de gate, arpège. Haut / bas choisit le champ, gauche / droite change la
-valeur, Ctrl + gauche / droite fait un grand pas. Sept préréglages sont fournis (PULSE PWM, SAW LEAD,
+avec vrai niveau de sustain, durée de gate, arpège. Haut / bas choisit le champ, A + gauche / droite change la
+valeur d'un pas fin et A + haut / bas d'un grand pas. Sept préréglages sont fournis (PULSE PWM, SAW LEAD,
 TRI BASS, NOISE HAT, PLUCK, PAD, ARP PULSE).
 
 Limites : Varvara fige la hauteur à chaque déclenchement (demi-tons entiers), donc ni vibrato, ni glissando,
