@@ -50,7 +50,7 @@ Instrument à droite de Phrase ; Groove est au-dessus de Phrase. Help s'ouvre pa
 |---|---|---|
 | SONG | 16 lignes par page, 4 colonnes (T1 à T4) de numéros de chaîne | croix ; B + haut / bas saute de 16 lignes |
 | CHAIN | la chaîne sous le curseur du song : 16 lignes (phrase, transposition) | croix ; B + croix déplace la case du song |
-| PHRASE | la phrase de la ligne de chaîne : 16 lignes (note, instrument) | croix ; B + haut / bas change de ligne de chaîne, B + gauche / droite de piste |
+| PHRASE | la phrase de la ligne de chaîne : 16 lignes (note, instrument, volume `VL` 00 à 7F ; les numéros de ligne 0, 4, 8 et C sont d'une autre couleur) | croix ; B + haut / bas change de ligne de chaîne, B + gauche / droite de piste |
 | INSTRUMENT | l'instrument courant (voir plus bas) | haut / bas choisit le champ |
 | PROJECT | nom du fichier, SAVE, LOAD, NEW SONG, CLOSE | haut / bas |
 | SETTINGS | A/B SWAP, KEYBOARD (AZERTY / QWERTY), HELP | haut / bas, A change ou ouvre |
@@ -83,6 +83,10 @@ la variante DS démarre sans échange.
 | Select + croix | écran voisin | SELECT + direction |
 | Start | lecture / arrêt (depuis la ligne de song du curseur) | PLAY |
 | A + Start (Instrument) | écoute l'instrument | EDIT + PLAY |
+| Start (écran Phrase) | joue seulement la phrase du curseur, en boucle, sur la piste du curseur ; Start l'arrête | PLAY |
+| Select + Start (écran Phrase) | joue toutes les chaînes à partir de la ligne de song du curseur, comme Start ailleurs | SEL + PLAY |
+| B + Start | arrêt général : lecture stoppée, les 4 voix remises à zéro et coupées (aussi fait par NEW SONG et LOAD) | OPT + PLAY |
+| A deux fois vite (Song, Chain) | sur une chaîne ou une phrase déjà posée, passe au prochain numéro libre | double EDIT |
 
 Dans l'écran Instrument : haut / bas choisit le champ, A + gauche / droite change la valeur d'un pas fin,
 A + haut / bas d'un grand pas (comme EDIT sur une valeur dans CCT), les flèches seules ne changent rien.

@@ -17,10 +17,11 @@
 |a0 @File &vector $2 &success $2 &stat $2 &delete $1 &append $1 &name $2 &length $2 &read $2 &write $2
 
 ( ==== memoire de travail, apres le code ==== )
-|7000
+|8000
 @song       $100    ( 64 lignes x 4 pistes : numero de chaine, ff = vide )
 @chn        $1000   ( 128 chaines x 16 lignes x (phrase, transposition) ; phrase ff = vide )
 @phr        $1000   ( 128 phrases x 16 lignes x (note, instrument) ; ff = vide, fe = OFF )
+@pvol       $800    ( volume de chaque ligne de phrase : 00 a 7f, ff = vide )
 @usedc      $80     ( enregistrement : chaines a ecrire )
 @usedp      $80     ( enregistrement : phrases a ecrire )
 @obuf       $100    ( tampon d'ecriture du fichier )
@@ -63,7 +64,7 @@
 @rd $2 @rl $1 @rt $1 @rw $1 @rn $2 @rneg $1 @rpulse $2 @rdelta $2 @rng $2 @ni $2
 @scn $1 @sca $2
 @rhi $1 @rlo $1 @ie-d $1 @ie-e $2 @ie-a $2 @ie-v $2 @ie-s $2
-@dsr $1 @anx $1 @pk $1 @hpage $1 @isv $1
+@dsr $1 @anx $1 @pk $1 @hpage $1 @isv $1 @fullr $1 @tvol $4 @pmode $1 @pfld $1 @lastvol $1 @dtf $1 @dts $1 @dtp1 $1 @dtp2 $1 @dtv $1 @nfb $1 @ppid $1 @dvol $1
 @sn $1 @npos $1 @nd $1 @nc $1 @cni $1 @rn2 $1 @fcount $1 @fsel $1 @fnl $1 @fi $1 @fdst $2 @frames $1 @rs $1 @ia $2 @dni $1 @nd2 $1
 
 
@@ -71,6 +72,8 @@
 |0100
 @on-reset
 	#30 ;lastnote STA
+	#7f ;lastvol STA
+	;vol-reset JSR2
 	#01 ;swapab STA
 	#1d4f .System/r DEO2
 	#1dbb .System/g DEO2
@@ -104,6 +107,8 @@ BRK
 @init-all
 	;song #0100 #ff ;fill JSR2
 	;phr #1000 #ff ;fill JSR2
+	;pvol #0800 #ff ;fill JSR2
+	#00 ;dtv STA
 	#0000 ;ic STA2
 	&l
 		;ic LDA2 #10 SFT2 ;chn ADD2 ;icp STA2
@@ -131,7 +136,7 @@ BRK
 
 ( lecture, ecran PHRASE : seules l'ancienne et la nouvelle ligne changent ; numero + 1, 0 = aucune )
 @redraw-rows
-	#00 ;mode STA
+	#00 ;mode STA #00 ;fullr STA
 	;cur-pid JSR2 ;dpid STA
 	;rowa LDA #00 EQU ;&nb JCN2
 	;rowa LDA #01 SUB ;gr STA ;draw-prow JSR2
@@ -216,6 +221,71 @@ JMP2r
 	#00
 JMP2r
 	&y #01
+JMP2r
+
+( p row -- addr* : volume de la ligne row de la phrase p )
+@vol-addr
+	#00 SWP STH2
+	#00 SWP #40 SFT2 ;pvol ADD2 STH2r ADD2
+JMP2r
+
+@vol-reset
+	#7f ;tvol STA #7f ;tvol INC2 STA #7f ;tvol #0002 ADD2 STA #7f ;tvol #0003 ADD2 STA
+JMP2r
+
+( -- b : octet de volume Audio (deux nibbles) d'apres le volume 00..7f de la voix courante )
+@vol-byte
+	;tvol ;vi LDA #00 SWP ADD2 LDA #03 SFT #0c MUL #0f DIV DUP #40 SFT ORA
+JMP2r
+
+( from -- id|ff : prochain numero libre apres from, en bouclant )
+@next-free-chain
+	;nfb STA ;calc-used JSR2
+	#01 ;ffi STA
+	&l
+		;nfb LDA ;ffi LDA ADD #7f AND
+		DUP #00 SWP ;usedc ADD2 LDA #00 EQU ;&f JCN2
+		POP
+		;ffi LDA INC DUP ;ffi STA #80 LTH ;&l JCN2
+	#ff
+JMP2r
+	&f
+JMP2r
+
+@next-free-phrase
+	;nfb STA ;calc-used JSR2
+	#01 ;ffi STA
+	&l
+		;nfb LDA ;ffi LDA ADD #7f AND
+		DUP #00 SWP ;usedp ADD2 LDA #00 EQU ;&f JCN2
+		POP
+		;ffi LDA INC DUP ;ffi STA #80 LTH ;&l JCN2
+	#ff
+JMP2r
+	&f
+JMP2r
+
+( double appui sur A : meme case, moins de 15 images apres le dernier appui qui a pose ou change la valeur )
+@dt-pos ( -- p1 p2 )
+	;c-sr LDA ;c-tk LDA #40 SFT ORA
+	;scr LDA #01 EQU ;&c JCN2
+	#00
+JMP2r
+	&c ;c-cr LDA
+JMP2r
+
+@dt-mark
+	;frames LDA ;dtf STA ;scr LDA ;dts STA
+	;dt-pos JSR2 ;dtp2 STA ;dtp1 STA #01 ;dtv STA
+JMP2r
+
+@dt-hit ( -- flag )
+	;dtv LDA #00 EQU ;&no JCN2
+	;scr LDA ;dts LDA NEQ ;&no JCN2
+	;dt-pos JSR2 ;dtp2 LDA EQU SWP ;dtp1 LDA EQU AND ;&eq JCN2
+	&no #00
+JMP2r
+	&eq ;frames LDA ;dtf LDA SUB #0f LTH
 JMP2r
 
 ( -- id|ff : premier numero libre ; un numero est pris s'il est cite ou non vide )
@@ -305,6 +375,11 @@ JMP2r
 @trig-track
 	;lt STA
 	;tpd ;lt LDA #00 SWP ADD2 LDA DUP #ff EQU ;&none JCN2
+	DUP ;prow LDA ;vol-addr JSR2 LDA
+	DUP #ff EQU ;&nv JCN2
+	;tvol ;lt LDA #00 SWP ADD2 STA ;&nw JMP2
+	&nv POP
+	&nw
 	;prow LDA ;phr-addr JSR2 ;sca STA2
 	;sca LDA2 INC2 LDA DUP #ff EQU ;&zi JCN2 ;&si JMP2
 	&zi POP #00
@@ -345,10 +420,11 @@ JMP2r
 @advance-row
 	;prow LDA INC DUP #10 LTH ;&ok JCN2
 	POP #00 ;prow STA
+	;pmode LDA ;&nx JCN2
 	#00 ;tv STA
 	&l ;tv LDA ;adv-track JSR2
 		;tv LDA INC DUP ;tv STA #04 LTH ;&l JCN2
-	#01 ;dirty STA
+	&nx #01 ;dirty STA
 JMP2r
 	&ok ;prow STA
 JMP2r
@@ -393,7 +469,45 @@ JMP2r
 		&ok
 		;tv LDA INC DUP ;tv STA #04 LTH ;&l JCN2
 	#00 ;prow STA #00 ;ptick STA #05 ;tacc STA
+	#00 ;pmode STA ;vol-reset JSR2
 	#01 ;playing STA #01 ;dirty STA
+JMP2r
+
+( ecran PHRASE : joue seulement la phrase du curseur, en boucle, sur la piste du curseur )
+@play-phrase
+	;cur-pid JSR2 DUP #ff EQU ;&no JCN2
+	;ppid STA
+	#00 ;tv STA
+	&l
+		#ff ;tsr ;tv LDA #00 SWP ADD2 STA
+		#ff ;tpd ;tv LDA #00 SWP ADD2 STA
+		#ff ;tch ;tv LDA #00 SWP ADD2 STA
+		;tv LDA INC DUP ;tv STA #04 LTH ;&l JCN2
+	;ppid LDA ;tpd ;c-tk LDA #00 SWP ADD2 STA
+	;cur-chain JSR2 ;c-cr LDA ;chn-addr JSR2 INC2 LDA ;tgp ;c-tk LDA #00 SWP ADD2 STA
+	#00 ;prow STA #00 ;ptick STA #05 ;tacc STA
+	#01 ;pmode STA ;vol-reset JSR2
+	#01 ;playing STA #01 ;dirty STA
+JMP2r
+	&no POP
+JMP2r
+
+( coupe tout : etat des 4 voix a zero, volume 0 et hauteur hors limite (le canal s'arrete) )
+@audio-reset
+	#00
+	&l
+		DUP ;vsel JSR2
+		;vp LDA2 #0020 #00 ;fill JSR2
+		;silence JSR2
+		INC DUP #04 LTH ;&l JCN2
+	POP
+	#ff ;hlr STA ;vol-reset JMP2
+
+( B + Start : arret general, lecture et son )
+@panic
+	#00 ;playing STA
+	;audio-reset JSR2
+	#01 ;dirty STA
 JMP2r
 
 @play-stop
@@ -540,8 +654,16 @@ JMP2r
 
 ( A + PLAY dans l'ecran instrument : ecoute l'instrument ; PLAY seul : lecture )
 @start-press
+	;bnow LDA #02 AND ;panic JCN2
 	;bnow LDA #01 AND ;&pv JCN2
-	;k-play JMP2
+	;scr LDA #02 NEQ ;&all JCN2
+	;bnow LDA #04 AND ;&sa JCN2
+	;playing LDA ;&stop JCN2
+	;play-phrase JMP2
+	&sa ;playing LDA ;pmode LDA #00 EQU AND ;&stop JCN2
+	;play-start JMP2
+	&stop ;play-stop JMP2
+	&all ;k-play JMP2
 	&pv #01 ;aused STA
 	;scr LDA #03 NEQ ;&np JCN2
 	;lastnote LDA ;preview JMP2
@@ -550,7 +672,25 @@ JMP2r
 
 ( n -- : joue la note sur la piste du curseur avec l'instrument courant )
 @play-trk
+	;cur-pid JSR2 DUP #ff EQU ;&nv JCN2
+	;c-pr LDA ;vol-addr JSR2 LDA DUP #ff EQU ;&nw JCN2
+	;tvol ;c-tk LDA #00 SWP ADD2 STA ;&go JMP2
+	&nw POP ;&go JMP2
+	&nv POP
+	&go
 	;c-tk LDA SWP ;cur-inst LDA ;trigger JMP2
+
+@vol-preview
+	;cur-phr-addr JSR2 LDA DUP #fe LTH ;play-trk JCN2
+	POP
+JMP2r
+
+@vol-clear
+	;cur-pid JSR2 DUP #ff EQU ;&n JCN2
+	;c-pr LDA ;vol-addr JSR2 #ff ROT ROT STA #01 ;modified STA
+JMP2r
+	&n POP
+JMP2r
 
 ( addr* max dir -- : -1 ou +1 sur un octet, borne a 0..max )
 @step-var
@@ -616,11 +756,15 @@ JMP2r
 JMP2r
 
 @song-tap
-	;c-sr LDA ;c-tk LDA ;song-addr JSR2 DUP2 LDA #ff EQU ;&e JCN2
-	POP2
+	;c-sr LDA ;c-tk LDA ;song-addr JSR2 ;eadr STA2
+	;eadr LDA2 LDA #ff EQU ;&e JCN2
+	;dt-hit JSR2 #00 EQU ;&r JCN2
+	;eadr LDA2 LDA ;next-free-chain JSR2 DUP #ff EQU ;&none JCN2
+	DUP ;lastchain STA ;eadr LDA2 STA #01 ;modified STA ;dt-mark JMP2
+	&none POP ;s-nofree ;msg STA2
+	&r
 JMP2r
-	&e ;lastchain LDA ROT ROT STA #01 ;modified STA
-JMP2r
+	&e ;lastchain LDA ;eadr LDA2 STA #01 ;modified STA ;dt-mark JMP2
 
 @song-clear
 	#ff ;c-sr LDA ;c-tk LDA ;song-addr JSR2 STA #01 ;modified STA
@@ -656,12 +800,15 @@ JMP2r
 @chain-tap
 	;c-fld LDA ;&r JCN2
 	;ensure-chain JSR2 #00 EQU ;&r JCN2
-	;cur-chain JSR2 ;c-cr LDA ;chn-addr JSR2 DUP2 LDA #ff EQU ;&e JCN2
-	POP2
+	;cur-chain JSR2 ;c-cr LDA ;chn-addr JSR2 ;eadr STA2
+	;eadr LDA2 LDA #ff EQU ;&e JCN2
+	;dt-hit JSR2 #00 EQU ;&r JCN2
+	;eadr LDA2 LDA ;next-free-phrase JSR2 DUP #ff EQU ;&none JCN2
+	DUP ;lastphr STA ;eadr LDA2 STA #01 ;modified STA ;dt-mark JMP2
+	&none POP ;s-nofree ;msg STA2
 	&r
 JMP2r
-	&e ;lastphr LDA ROT ROT STA #01 ;modified STA
-JMP2r
+	&e ;lastphr LDA ;eadr LDA2 STA #01 ;modified STA ;dt-mark JMP2
 
 @chain-clear
 	;cur-chain JSR2 DUP #ff EQU ;&n JCN2
@@ -675,7 +822,7 @@ JMP2r
 JMP2r
 
 ( ---- PHRASE ---- )
-@phrase-plain ;c-pr #0f ;c-fld #01 ;move-dir JMP2
+@phrase-plain ;c-pr #0f ;pfld #02 ;move-dir JMP2
 @phrase-opt ;c-cr #0f ;c-tk #03 ;move-dir JMP2
 
 ( n -- : ecrit la note ; l'instrument courant si la case n'en a pas ; ff / fe : sans instrument )
@@ -691,7 +838,8 @@ JMP2r
 JMP2r
 
 @phrase-edit
-	;c-fld LDA ;&ins JCN2
+	;pfld LDA #01 EQU ;&ins JCN2
+	;pfld LDA #02 EQU ;&vol JCN2
 	;ensure-phrase JSR2 #00 EQU ;&r JCN2
 	;cur-phr-addr JSR2 LDA DUP #fe LTH ;&k JCN2
 	POP ;lastnote LDA
@@ -709,9 +857,18 @@ JMP2r
 	&ok2 DUP ;cur-inst STA ;eadr LDA2 STA #01 ;modified STA
 	&r
 JMP2r
+	&vol ;ensure-phrase JSR2 #00 EQU ;&r JCN2
+	;cur-pid JSR2 ;c-pr LDA ;vol-addr JSR2 ;eadr STA2
+	;eadr LDA2 LDA DUP #ff NEQ ;&kv JCN2
+	POP ;lastvol LDA
+	&kv #7f ;deltas16 ;apply-delta JSR2 ;&okv JCN2
+	POP
+JMP2r
+	&okv DUP ;lastvol STA ;eadr LDA2 STA #01 ;modified STA ;vol-preview JMP2
 
 @phrase-tap
-	;c-fld LDA ;&ins JCN2
+	;pfld LDA #01 EQU ;&ins JCN2
+	;pfld LDA #02 EQU ;&vol JCN2
 	;ensure-phrase JSR2 #00 EQU ;&r JCN2
 	;cur-phr-addr JSR2 LDA DUP #fe LTH ;&have JCN2
 	POP ;lastnote LDA DUP ;set-note JSR2 ;play-trk JMP2
@@ -723,10 +880,15 @@ JMP2r
 JMP2r
 	&ok INC2 ;eadr STA2 ;cur-inst LDA ;eadr LDA2 STA #01 ;modified STA
 JMP2r
+	&vol ;ensure-phrase JSR2 #00 EQU ;&r JCN2
+	;cur-pid JSR2 ;c-pr LDA ;vol-addr JSR2 DUP2 LDA #ff EQU ;&ve JCN2
+	POP2 ;vol-preview JMP2
+	&ve ;lastvol LDA ROT ROT STA #01 ;modified STA ;vol-preview JMP2
 
 ( A + B : case vide ou phrase absente = OFF, sinon efface )
 @phrase-clear
-	;c-fld LDA ;&ins JCN2
+	;pfld LDA #01 EQU ;&ins JCN2
+	;pfld LDA #02 EQU ;vol-clear JCN2
 	;cur-pid JSR2 #ff EQU ;&mk JCN2
 	;cur-phr-addr JSR2 LDA #ff EQU ;&mk JCN2
 	#ff ;set-note JMP2
@@ -740,7 +902,8 @@ JMP2r
 ( Retour arriere / Suppr : efface seulement )
 @phrase-key
 	;cur-pid JSR2 #ff EQU ;&r JCN2
-	;c-fld LDA ;&ins JCN2
+	;pfld LDA #01 EQU ;&ins JCN2
+	;pfld LDA #02 EQU ;vol-clear JCN2
 	#ff ;set-note JMP2
 	&ins #ff ;cur-phr-addr JSR2 INC2 STA #01 ;modified STA
 	&r
@@ -897,6 +1060,7 @@ JMP2r
 
 ( n -- : ecoute la note avec l'instrument courant, sans rien ecrire )
 @preview
+	#7f ;tvol STA
 	#00 SWP ;cur-inst LDA ;trigger JMP2
 
 @tab-az "wsxdcvgbhnj, "a 00 "z 00 "e "r 00 "t 00 "y 00 "u
@@ -1054,7 +1218,8 @@ JMP2r
 			#fe LTH ;&on JCN2
 			POP2 ;t-inst-off ;put-str JSR2 ;&tl JMP2
 			&on #20 ;put JSR2 INC2 LDA ;put-hex JSR2
-			&tl ;t-row-tail ;put-str JSR2
+			&tl #20 ;put JSR2 ;ss LDA ;sr LDA ;vol-addr JSR2 LDA ;put-id JSR2
+			;t-row-tail ;put-str JSR2
 			;sr LDA INC DUP ;sr STA #10 LTH ;&rw JCN2
 		;t-fence-close ;put-str JSR2
 		&skip
@@ -1100,6 +1265,7 @@ JMP2r
 	;playing LDA ;&np JCN2 ;&go JMP2
 	&np ;play-stop JSR2
 	&go
+	;audio-reset JSR2
 	#00 ;mode STA
 	;init-all JSR2
 	;inst-all-ay JSR2
@@ -1190,6 +1356,11 @@ JMP2r
 	DUP #08 LTH ;&st JCN2
 	POP #00
 	&st ;sa LDA2 INC2 STA
+	;lbuf #0007 ADD2 ;parse-b2 JSR2
+	DUP #ff EQU ;&vk JCN2
+	DUP #80 LTH ;&vk JCN2
+	POP #7f
+	&vk ;pid LDA2 NIP ;lrow LDA ;vol-addr JSR2 STA
 	&inc ;lrow LDA INC ;lrow STA
 JMP2r
 
@@ -1421,6 +1592,7 @@ JMP2r
 	;playing LDA ;&np JCN2 ;&go JMP2
 	&np ;play-stop JSR2
 	&go
+	;audio-reset JSR2
 	;init-all JSR2
 	#01 ;slen STA
 	#06 ;spd STA
@@ -1435,7 +1607,7 @@ JMP2r
 
 ( ==== dessin ==== )
 @redraw
-	#00 ;mode STA
+	#00 ;mode STA #01 ;fullr STA
 	#0000 .Screen/x DEO2
 	#0000 .Screen/y DEO2
 	#80 .Screen/pixel DEO
@@ -1582,6 +1754,7 @@ JMP2r
 	#02 ;col STA
 	#04 #04 ;at JSR2 ;s-hnote ;put-str JSR2
 	#09 #04 ;at JSR2 ;s-hin ;put-str JSR2
+	#0c #04 ;at JSR2 ;s-hvol ;put-str JSR2
 	#00 ;gr STA
 	&row
 		;draw-prow JSR2
@@ -1592,6 +1765,9 @@ JMP2r
 @draw-prow
 	;playing LDA ;hlr LDA ;gr LDA EQU AND ;hlf STA
 	#01 ;col STA
+	;gr LDA #03 AND ;&nb JCN2
+	#03 ;col STA
+	&nb
 	;hlf LDA #00 EQU ;&nh JCN2
 	#02 ;col STA
 	&nh
@@ -1602,13 +1778,21 @@ JMP2r
 	;sca LDA2 LDA ;sca LDA2 INC2 LDA ;&go JMP2
 	&em POP #ff #ff
 	&go ;dinst STA ;dnote STA
+	;dpid LDA DUP #ff EQU ;&nv JCN2
+	;gr LDA ;vol-addr JSR2 LDA ;&gv JMP2
+	&nv POP #ff
+	&gv ;dvol STA
 	#04 ;gr LDA #05 ADD ;at JSR2
-	;gr LDA ;c-pr LDA EQU ;c-fld LDA #00 EQU AND ;set-cell-col JSR2
+	;gr LDA ;c-pr LDA EQU ;pfld LDA #00 EQU AND ;set-cell-col JSR2
 	;dnote LDA ;put-note JSR2
 	#01 ;col STA #20 ;put JSR2
 	#09 ;gr LDA #05 ADD ;at JSR2
-	;gr LDA ;c-pr LDA EQU ;c-fld LDA AND ;set-cell-col JSR2
+	;gr LDA ;c-pr LDA EQU ;pfld LDA #01 EQU AND ;set-cell-col JSR2
 	;dinst LDA ;put-id JSR2
+	#01 ;col STA #20 ;put JSR2
+	#0c ;gr LDA #05 ADD ;at JSR2
+	;gr LDA ;c-pr LDA EQU ;pfld LDA #02 EQU AND ;set-cell-col JSR2
+	;dvol LDA ;put-id JSR2
 	#01 ;col STA #20 ;put JMP2
 
 ( ---- GROOVE : tempo ---- )
@@ -1669,7 +1853,14 @@ JMP2r
 	;mode LDA ;emit JCN2
 	;draw-char JMP2
 
+( redessin complet : l'ecran vient d'etre rempli, un espace de couleur 1 n'a rien a dessiner )
 @draw-char ( c -- )
+	DUP #20 NEQ ;&nz JCN2
+	;fullr LDA #00 EQU ;&nz JCN2
+	;col LDA #01 NEQ ;&nz JCN2
+	POP ;cx LDA2 #0008 ADD2 ;cx STA2
+JMP2r
+	&nz
 	DUP #60 GTH ;&lc JCN2
 	;&go JMP2
 	&lc #20 SUB
@@ -2105,7 +2296,7 @@ JMP2r
 	;wave-sqr #0c ;vport JSR2 DEO2
 	#0020 #0a ;vport JSR2 DEO2
 	#0000 #08 ;vport JSR2 DEO2
-	#cc #0e ;vport JSR2 DEO
+	;vol-byte JSR2 #0e ;vport JSR2 DEO
 	;tn LDA #0c ADD #0f ;vport JSR2 DEO
 JMP2r
 	&sid
@@ -2138,7 +2329,7 @@ JMP2r
 	&nz #0120
 	&ln #0a ;vport JSR2 DEO2
 	#0000 #08 ;vport JSR2 DEO2
-	#cc #0e ;vport JSR2 DEO
+	;vol-byte JSR2 #0e ;vport JSR2 DEO
 	;vi LDA ;voice-tick JSR2
 	;tn LDA #0c ADD #0f ;vport JSR2 DEO
 JMP2r
@@ -2719,6 +2910,14 @@ JMP2r
 	;hpa9 ;put-str JSR2
 	#02 #0e ;at JSR2
 	;hpa10 ;put-str JSR2
+	#02 #0f ;at JSR2
+	;hpa11 ;put-str JSR2
+	#02 #10 ;at JSR2
+	;hpa12 ;put-str JSR2
+	#02 #11 ;at JSR2
+	;hpa13 ;put-str JSR2
+	#02 #12 ;at JSR2
+	;hpa14 ;put-str JSR2
 JMP2r
 @hpa0 "A 20 "TAP 20 "PLACE 20 "/ 20 "REPLAY 00
 @hpa1 "A+L/R 20 "VALUE 20 "+-1 00
@@ -2730,7 +2929,11 @@ JMP2r
 @hpa7 "B+L/R 20 "INST 20 "PREV 20 "/ 20 "NEXT 00
 @hpa8 "SEL+DIRS 20 "SCREEN 20 "MAP 00
 @hpa9 "START 20 "PLAY 20 "/ 20 "STOP 00
-@hpa10 "A+START 20 "PREVIEW 20 "(INST) 00
+@hpa10 "PHRASE 20 "START 20 "PLAYS 20 "IT 20 "ALONE 00
+@hpa11 "PHRASE 20 "SEL+START 20 "PLAYS 20 "ALL 00
+@hpa12 "A+START 20 "PREVIEW 20 "(INST) 00
+@hpa13 "B+START 20 "ALL 20 "OFF 20 "(PANIC) 00
+@hpa14 "A 20 "TWICE 20 "ON 20 "ID 20 "NEXT 20 "FREE 20 "ONE 00
 @hpb
 	#01 ;col STA
 	#02 #04 ;at JSR2
@@ -2758,7 +2961,7 @@ JMP2r
 JMP2r
 @hpb0 "SONG 20 "64 20 "ROWS 20 "X 20 "4 20 "TRACKS 00
 @hpb1 "CHAIN 20 "16 20 "X 20 "PHRASE 20 "+ 20 "TRANSP 00
-@hpb2 "PHRASE 20 "16 20 "X 20 "NOTE 20 "+ 20 "INST 00
+@hpb2 "PHRASE 20 "16 20 "X 20 "NOTE 20 "INST 20 "VOL 00
 @hpb3 "INSTRUMENT 20 "PRESET 20 "LINE 00
 @hpb4 20 "A+L/R 20 "PICKS 20 "A 20 "PRESET 00
 @hpb5 20 "AND 20 "ITS 20 "NAME, 20 "KEEPS 20 "NOTES 00
@@ -2867,6 +3070,7 @@ JMP2r
 @s-tr "TR 00
 @s-hnote "NOTE 00
 @s-hin "IN 00
+@s-hvol "VL 00
 @s-nofree "NO 20 "FREE 20 "SLOT 00
 @s-spdl "SPEED 00
 @s-ghint "A+L/R 20 "CHANGE 00
@@ -3041,7 +3245,7 @@ JMP2r
 	20 "--
 	00
 @t-row-tail
-	20 "-- 20 "--- 20 "00 20 "--- 20 "00 20 "--- 20 "00 0a
+	20 "--- 20 "00 20 "--- 20 "00 20 "--- 20 "00 0a
 	00
 @t-fence-close
 	"``` 0a

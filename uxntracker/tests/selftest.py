@@ -24,6 +24,7 @@ ROOT = HERE.parent
 DRIVER = r"""
 |10 @Console &vector $2 &read $1 &pad $5 &write $1 &error $1
 |d000 @tbuf $480
+@t-i $2 @x-n $2 @x-a $2 @x-p $2 @x-c $1 @x-k $1 @x-r $1 @x-w $1 @x-h $1 @x-m $1 @x-ti $1 @x-tn $1 @x-tv $1
 |0100
 @@FULLBODY
 @test-main
@@ -68,6 +69,8 @@ DRIVER = r"""
 	#6b #00 #06 #03 ;x-phr JSR2
 	#1e #05 #06 #09 ;x-phr JSR2
 	#6b #07 #7f #0f ;x-phr JSR2
+	( volumes )
+	#7f ;pvol STA #40 ;pvol #0004 ADD2 STA #00 ;pvol #0051 ADD2 STA #20 ;pvol #07ff ADD2 STA
 	;x-mark-a JSR2
 	;do-save JSR2
 	;t-msg JSR2
@@ -198,6 +201,7 @@ JMP2r
 	;song #0100 ;x-dump JSR2
 	;chn #1000 ;x-dump JSR2
 	;phr #1000 ;x-dump JSR2
+	;pvol #0800 ;x-dump JSR2
 JMP2r
 @dump-ins
 	;ins #0200 ;x-dump JMP2
@@ -287,6 +291,10 @@ JMP2r
 	;x-names JSR2
 	;x-presets JSR2
 	;x-help JSR2
+	;x-vol JSR2
+	;x-play JSR2
+	;x-dbl JSR2
+	;x-panic JSR2
 JMP2r
 @x-nav
 	#04 ;x-down JSR2 #40 ;x-tap JSR2 #40 ;x-tap JSR2 #04 ;x-up JSR2
@@ -334,6 +342,50 @@ JMP2r
 	#04 ;x-down JSR2 #40 ;x-tap JSR2 #04 ;x-up JSR2 ;x-hs JSR2
 	#02 ;x-tap JSR2 ;x-hs JSR2
 JMP2r
+@x-vol
+	( PHRASE : colonne VL, A pose 7F (par defaut), A + gauche -1, A + haut refuse (>7F), A + bas -16, A + B efface )
+	#7f ;lastvol STA #00 ;c-sr STA #00 ;c-tk STA #00 ;c-cr STA #00 ;c-pr STA #00 ;pfld STA #02 ;goto-scr JSR2
+	#80 ;x-tap JSR2 #80 ;x-tap JSR2
+	#01 ;x-tap JSR2 ;x-vs JSR2
+	#01 ;x-down JSR2 #40 ;x-tap JSR2 #01 ;x-up JSR2 ;x-vs JSR2
+	#01 ;x-down JSR2 #10 ;x-tap JSR2 #01 ;x-up JSR2 ;x-vs JSR2
+	#01 ;x-down JSR2 #20 ;x-tap JSR2 #01 ;x-up JSR2 ;x-vs JSR2
+	#01 ;x-down JSR2 #02 ;x-down JSR2 #02 ;x-up JSR2 #01 ;x-up JSR2 ;x-vs JSR2
+JMP2r
+@x-vs
+	;t-nl JSR2
+	#56 .Console/write DEO #20 .Console/write DEO
+	;cur-pid JSR2 ;t-hex JSR2 #20 .Console/write DEO
+	;cur-pid JSR2 ;c-pr LDA ;vol-addr JSR2 LDA ;t-hex JSR2 ;t-nl JMP2
+@x-play
+	( PHRASE : Start = cette phrase seule sur la piste du curseur, Select + Start = tout )
+	;t-nl JSR2
+	#08 ;x-tap JSR2 ;x-qs JSR2
+	#08 ;x-tap JSR2 ;x-qs JSR2
+	#04 ;x-down JSR2 #08 ;x-tap JSR2 #04 ;x-up JSR2 ;x-qs JSR2
+	#08 ;x-tap JSR2 ;x-qs JSR2
+JMP2r
+@x-qs
+	;t-nl JSR2
+	#51 .Console/write DEO #20 .Console/write DEO
+	;playing LDA ;t-hex JSR2 ;pmode LDA ;t-hex JSR2 #20 .Console/write DEO
+	;tpd LDA ;t-hex JSR2 ;tpd INC2 LDA ;t-hex JSR2 ;tpd #0002 ADD2 LDA ;t-hex JSR2 ;tpd #0003 ADD2 LDA ;t-hex JSR2 ;t-nl JMP2
+@x-dbl
+	( SONG : A sur une case vide pose la derniere chaine, un second A rapide passe a la suivante libre )
+	#00 ;goto-scr JSR2 #20 ;c-sr STA #03 ;c-tk STA
+	#01 ;x-tap JSR2 ;x-ds JSR2
+	#01 ;x-tap JSR2 ;x-ds JSR2
+	#01 ;x-tap JSR2 ;x-ds JSR2
+JMP2r
+@x-ds
+	;t-nl JSR2
+	#44 .Console/write DEO #20 .Console/write DEO
+	;c-sr LDA ;c-tk LDA ;song-addr JSR2 LDA ;t-hex JSR2 ;t-nl JMP2
+@x-panic
+	#03 ;vs STA #03 ;vs #0020 ADD2 STA #01 ;playing STA
+	#02 ;x-down JSR2 #08 ;x-tap JSR2 #02 ;x-up JSR2
+	#5a .Console/write DEO #20 .Console/write DEO
+	;playing LDA ;t-hex JSR2 ;vs LDA ;t-hex JSR2 ;vs #0020 ADD2 LDA ;t-hex JSR2 ;t-nl JMP2
 @x-hs
 	#48 .Console/write DEO #20 .Console/write DEO
 	;scr LDA ;t-hex JSR2 #20 .Console/write DEO
@@ -365,7 +417,6 @@ JMP2r
 		;t-i LDA2 ;x-n LDA2 LTH2 ;&l JCN2
 	#2f .Console/write DEO #20 .Console/write DEO
 JMP2r
-@t-i $2 @x-n $2 @x-a $2 @x-p $2 @x-c $1 @x-k $1 @x-r $1 @x-w $1 @x-h $1 @x-m $1 @x-ti $1 @x-tn $1 @x-tv $1
 """
 
 
@@ -381,7 +432,8 @@ def build(work, load_only):
     full, rest = rest.split("@@LOADBODY")
     load, helpers = rest.split("@@HELPERS")
     body = load.replace("@test-load", "@test-main") if load_only else full
-    test = src.replace(marker, head + body + helpers + "\n@on-reset")
+    # le pilote va a la fin : ses references vers le code du tracker sont alors en arriere (drifloon limite les references en avant)
+    test = src.replace(marker, head + "\t;test-main JMP2\n@on-reset") + "\n" + body + helpers + "\n"
     if load_only:
         test = test.replace('"song.cct', '"' + Path(load_only).name)
     (work / "selftest.tal").write_text(test)
@@ -556,7 +608,7 @@ def main():
         if w not in "\n".join(screens.get(n, [])):
             bad.append("ecran %d : %r absent" % (n, w))
     want = {0: ["SONG", "T1", "T4", "SCPI"], 1: ["CHAIN", "PH", "TR"],
-            2: ["PHRASE", "NOTE", "IN"], 3: ["INSTRUMENT", "PRESET", "SQUARE"],
+            2: ["PHRASE", "NOTE", "IN", "VL"], 3: ["INSTRUMENT", "PRESET", "SQUARE"],
             13: ["PAGE 2/3", "PRESET"], 14: ["PAGE 3/3", "TAB NEXT"], 4: ["SAVE", "LOAD"],
             5: ["SETTINGS", "A/B SWAP", "KEYBOARD", "HELP"], 6: ["GROOVE", "SPEED"],
             7: ["HELP", "PAGE 1/3", "START"]}
@@ -587,12 +639,15 @@ def main():
             states.append(m.group(0))
     extra = []
     for l in secs["I"]:
-        m = re.match(r"[PH] [0-9A-F]{2} .*$", l.strip())
+        m = re.match(r"[PHZVQD] [0-9A-F]{2}.*$", l.strip())
         if m:
             extra.append(m.group(0))
     exp_extra = ["P 03 1B 0001 XRI BASS", "P 03 1B 0004 PULSE PWM", "P 03 01 0004 SQUARE",
                  "P 03 1B 0004 PULSE PWM", "P 03 1B 0002 SAW LEAD", "P 03 1B 0003 SAW LEAD",
-                 "H 07 01", "H 07 02", "H 07 02", "H 07 01", "H 07 00", "H 05 00"]
+                 "H 07 01", "H 07 02", "H 07 02", "H 07 01", "H 07 00", "H 05 00",
+                 "V 01 7F", "V 01 7E", "V 01 7E", "V 01 6E", "V 01 FF",
+                 "Q 0101 01FFFFFF", "Q 0001 01FFFFFF", "Q 0100 011010FF", "Q 0000 011010FF",
+                 "D 01", "D 02", "D 03", "Z 000000"]
     if extra != exp_extra:
         bad.append("preset / aide :\n  obtenu  %s\n  attendu %s" % (extra, exp_extra))
     print("manette :", *states, sep="\n  ")

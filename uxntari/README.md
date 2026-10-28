@@ -49,7 +49,7 @@ The ST has no gamepad and a joystick has one button, so the Varvara controller i
 | Select | Shift (left or right) |
 | Start | Home |
 
-Other keys are sent as typed characters (`Controller/key`). Control, Alt and Shift are polled every frame, so chords such as A + arrow work. The ST keyboard does not report key releases for the arrows: see Limits.
+Other keys are sent as typed characters (`Controller/key`). Control, Alt and Shift are polled every frame, so chords such as A + arrow work. TOS reports Control + left / right as their own scan codes (0x73 / 0x74), and Shift + arrow with an ASCII digit; both are mapped back to the plain arrows. The ST keyboard does not report key releases for the arrows: see Limits.
 
 ## Limits
 

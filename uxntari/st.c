@@ -148,6 +148,8 @@ arrow_button(int scan)
 	case 0x50: return 0x20;
 	case 0x4b: return 0x40;
 	case 0x4d: return 0x80;
+	case 0x73: return 0x40; /* Control + gauche */
+	case 0x74: return 0x80; /* Control + droite */
 	case 0x47: return 0x08;
 	}
 	return 0;
@@ -178,9 +180,8 @@ poll_keys(void)
 		int scan = (int)((k >> 16) & 0xff), ascii = (int)(k & 0xff);
 		if(scan == KEY_UNDO) {
 			quit = 1;
-		} else if(ascii) {
-			controller_key(ascii);
 		} else {
+			/* d'abord le code de touche : avec Shift une fleche porte aussi un ascii ('8', '2'...) */
 			int b = arrow_button(scan);
 			if(b) {
 				if(held != b) {
@@ -189,7 +190,8 @@ poll_keys(void)
 					held = b;
 				}
 				held_age = 0;
-			}
+			} else if(ascii)
+				controller_key(ascii);
 		}
 	}
 	if(held && ++held_age > HOLD_FRAMES) {

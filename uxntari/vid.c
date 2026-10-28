@@ -99,28 +99,50 @@ put_bits(int layer, int row, int col, int mask, int b0, int b1)
 		scr[o] = f0 | g0;
 }
 
-/* Remplit les colonnes [xa, xb) et les lignes [ya, yb) d'une couche avec la couleur idx */
+/* Ecrit un octet entier de la couche (valeurs b0 et b1 des deux plans), sans masque */
+static void
+put_full(int layer, int o, int b0, int b1)
+{
+	int f0, f1, m;
+	lay[layer][o] = b0;
+	f0 = lay[1][o];
+	if(planes >= 2) {
+		lay[layer][o + 2] = b1;
+		f1 = lay[1][o + 2];
+		m = (f0 | f1) ^ 0xff;
+		scr[o] = f0 | (lay[0][o] & m);
+		scr[o + 2] = f1 | (lay[0][o + 2] & m);
+	} else
+		scr[o] = f0 | lay[0][o];
+}
+
+/* Remplit les colonnes [xa, xb) et les lignes [ya, yb) d'une couche avec la couleur idx.
+   Les octets entierement couverts passent par put_full : un fond d'ecran est le cas courant. */
 void
 vid_fill(int xa, int xb, int ya, int yb, int layer, int idx)
 {
-	int row, col, lo, a, b, mask, b0, b1;
+	int row, col, lo, a, b, mask, b0, b1, c0, c1, full0, full1;
 	if(xa < 0) xa = 0;
 	if(ya < 0) ya = 0;
 	if(xb > vid_w) xb = vid_w;
 	if(yb > vid_h) yb = vid_h;
 	if(xa >= xb || ya >= yb) return;
+	full0 = planes >= 2 ? (idx & 1 ? 0xff : 0) : (idx ? 0xff : 0);
+	full1 = planes >= 2 && (idx & 2) ? 0xff : 0;
+	c0 = xa >> 3;
+	c1 = (xb - 1) >> 3;
 	for(row = ya; row < yb; row++)
-		for(col = xa >> 3; col <= (xb - 1) >> 3; col++) {
+		for(col = c0; col <= c1; col++) {
 			lo = col << 3;
+			if(lo >= xa && lo + 8 <= xb) {
+				put_full(layer, row_off[row] + ((col >> 1) << step_sh) + (col & 1), full0, full1);
+				continue;
+			}
 			a = xa > lo ? xa - lo : 0;
 			b = xb - lo < 8 ? xb - lo : 8;
 			mask = (0xff >> a) & (0xff << (8 - b)) & 0xff;
-			b0 = b1 = 0;
-			if(planes >= 2) {
-				if(idx & 1) b0 = mask;
-				if(idx & 2) b1 = mask;
-			} else if(idx)
-				b0 = mask;
+			b0 = full0 & mask;
+			b1 = full1 & mask;
 			put_bits(layer, row, col, mask, b0, b1);
 		}
 }
@@ -129,13 +151,21 @@ vid_fill(int xa, int xb, int ya, int yb, int layer, int idx)
 void
 vid_tile(int x, int y, int addr, int ctrl)
 {
-	int j, c, v, idx, col0, s, src, ch1, ch2, m, b0, b1, mc, mk[4];
+	int j, c, v, idx, col0, s, src, ch1, ch2, m, b0, b1, mk[4];
+	int ok[4], p0[4], p1[4]; /* par couleur : utilisee, bit du plan 0, bit du plan 1 (0 ou 0xff) */
 	int layer = (ctrl >> 6) & 1, blend = ctrl & 0xf;
 	int flipx = ctrl & 0x10, flipy = ctrl & 0x20, twobpp = ctrl & 0x80;
 	int opaque = mod5[blend];
 	if(x < -8 || y < -8 || x > vid_w || y > vid_h) return;
 	col0 = ((x + 8) >> 3) - 1;
 	s = (x + 8) & 7;
+	for(c = 0; c < 4; c++) {
+		v = blend_lut[blend][layer][c];
+		idx = layer ? v >> 2 : v;
+		ok[c] = (opaque || c) ? 0xff : 0;
+		p0[c] = (planes >= 2 ? idx & 1 : idx) ? 0xff : 0;
+		p1[c] = planes >= 2 && (idx & 2) ? 0xff : 0;
+	}
 	for(j = 0; j < 8; j++) {
 		src = flipy ? addr + 7 - j : addr + j;
 		ch1 = ram[src & 0xffff];
@@ -148,23 +178,16 @@ vid_tile(int x, int y, int addr, int ctrl)
 		mk[2] = ch2 & (ch1 ^ 0xff);
 		mk[1] = ch1 & (ch2 ^ 0xff);
 		mk[0] = (ch1 | ch2) ^ 0xff;
-		m = b0 = b1 = 0;
-		for(c = 0; c < 4; c++)
-			if(opaque || c) {
-				mc = mk[c];
-				v = blend_lut[blend][layer][c];
-				idx = layer ? v >> 2 : v;
-				m |= mc;
-				if(planes >= 2) {
-					if(idx & 1) b0 |= mc;
-					if(idx & 2) b1 |= mc;
-				} else if(idx)
-					b0 |= mc;
-			}
+		m = (mk[0] & ok[0]) | (mk[1] & ok[1]) | (mk[2] & ok[2]) | (mk[3] & ok[3]);
+		b0 = (mk[0] & p0[0]) | (mk[1] & p0[1]) | (mk[2] & p0[2]) | (mk[3] & p0[3]);
+		b1 = (mk[0] & p1[0]) | (mk[1] & p1[1]) | (mk[2] & p1[2]) | (mk[3] & p1[3]);
+		if(!s) {
+			put_bits(layer, y + j, col0, m, b0, b1);
+			continue;
+		}
 		put_bits(layer, y + j, col0, m >> s, b0 >> s, b1 >> s);
-		if(s)
-			put_bits(layer, y + j, col0 + 1, (m << (8 - s)) & 0xff,
-				(b0 << (8 - s)) & 0xff, (b1 << (8 - s)) & 0xff);
+		put_bits(layer, y + j, col0 + 1, (m << (8 - s)) & 0xff,
+			(b0 << (8 - s)) & 0xff, (b1 << (8 - s)) & 0xff);
 	}
 }
 
