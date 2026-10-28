@@ -155,8 +155,11 @@ Réenregistrer un fichier CCT riche depuis ici en perd donc ces parties.
 - Contrôlé sous Xvfb (xdotool) avec uxn2 : menu (enregistrer, charger, nouveau avec confirmation), vue
   instruments, changement d'octave, rechargement.
 
-Le rendu sonore n'a pas été écouté (audio factice) : enveloppe, PWM et arpège sont implémentés mais non
-validés à l'oreille. uxn11 n'a pas d'audio, il faut uxn2.
+Sur Nintendo DS (`tracker-ds.rom`), le son est correct depuis que la forme d'onde d'un instrument SID n'est
+plus recalculée à chaque tick (seulement si le niveau ou la largeur d'impulsion change, avec un remplissage
+rapide pour l'impulsion seule) : la première version déformait le son. Sur Atari ST avec `uxntari` à 32 MHz,
+le son était correct mais l'affichage lent, d'où le redessin partiel pendant la lecture (deux lignes de la
+grille par ligne jouée). Sous uxn2 l'audio était factice : pas écouté. uxn11 n'a pas d'audio, il faut uxn2.
 
 ## Fichiers
 
