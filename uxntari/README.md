@@ -37,6 +37,20 @@ Copy `UXN.PRG` and some `.rom` files to the same directory (or floppy). Without 
 | datetime   | complete |
 | audio      | four voices on the YM2149 (see below) |
 
+## Gamepad emulation
+
+The ST has no gamepad and a joystick has one button, so the Varvara controller is emulated by the keyboard. The mapping lives in the controller device, so it applies to every ROM, whatever it is: any ROM that reads `Controller/button` gets it, with nothing to configure per ROM. (The joystick ports are not read.)
+
+| Varvara button | ST key |
+|---|---|
+| Up, Down, Left, Right | arrow keys |
+| A | Control |
+| B | Alt |
+| Select | Shift (left or right) |
+| Start | Home |
+
+Other keys are sent as typed characters (`Controller/key`). Control, Alt and Shift are polled every frame, so chords such as A + arrow work. The ST keyboard does not report key releases for the arrows: see Limits.
+
 ## Limits
 
 - The ST keyboard does not report key releases: an arrow is considered released a few frames after its last repeat.

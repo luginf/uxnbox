@@ -33,7 +33,7 @@
 @cur-s $1 @cur-r $1 @cur-v $1 @cur-inst $1 @ifield $1
 @view $1 @menu $1 @msel $1 @mconf $1 @modified $1 @nlen $1
 @playing $1 @psong $1 @prow $1 @ptick $1 @tacc $1 @hl-song $1 @hl-row $1
-@dirty $1 @mode $1 @col $1 @msg $2
+@rowa $1 @rowb $1 @dirty $1 @mode $1 @col $1 @msg $2
 @bnow $1 @bprev $1 @bedge $1 @brel $1 @key $1 @jazz $1 @lastnote $1 @bused $1 @dirn $1
 @cx $2 @cy $2
 @tv $1 @gr $1 @gv $1 @hlf $1 @tn2 $1 @ti2 $1
@@ -49,7 +49,7 @@
 @vi $1 @vp $2 @ti $1 @tn $1
 @rd $2 @rl $1 @rt $1 @rw $1 @rn $2 @rneg $1 @rpulse $2 @rdelta $2 @rng $2 @ni $2
 @scn $1 @sca $2
-@ie-d $1 @ie-e $2 @ie-a $2 @ie-v $2 @ie-s $2
+@rhi $1 @rlo $1 @ie-d $1 @ie-e $2 @ie-a $2 @ie-v $2 @ie-s $2
 
 ( ==== reset ==== )
 |0100
@@ -90,11 +90,24 @@ BRK
 	&hold ;tacc STA
 	&chk
 	;dirty LDA ;&paint JCN2
+	;rowa LDA ;rowb LDA ORA ;&part JCN2
 BRK
 	&paint
-		#00 ;dirty STA
+		#00 ;dirty STA #00 ;rowa STA #00 ;rowb STA
 		;redraw JSR2
 BRK
+	&part ;redraw-rows JSR2
+BRK
+
+( lecture : seules l'ancienne et la nouvelle ligne de la grille changent ; numero + 1, 0 = aucune )
+@redraw-rows
+	#00 ;mode STA
+	;rowa LDA #00 EQU ;&nb JCN2
+	;rowa LDA #01 SUB ;gr STA ;draw-row JSR2
+	&nb ;rowb LDA #00 EQU ;&z JCN2
+	;rowb LDA #01 SUB ;gr STA ;draw-row JSR2
+	&z #00 ;rowa STA #00 ;rowb STA
+JMP2r
 
 @do-tick
 	;voices-tick JSR2
@@ -118,10 +131,17 @@ JMP2r
 JMP2r
 
 @trigger-row
+	;view LDA ;menu LDA ORA ;&full JCN2
+	;psong LDA ;cur-s LDA NEQ ;&full JCN2
+	;rowb LDA ;&full JCN2
+	;hl-row LDA INC ;rowa STA
+	;prow LDA INC ;rowb STA
+	;&go JMP2
+	&full #01 ;dirty STA
+	&go
 	;psong LDA ;hl-song STA
 	;prow LDA ;hl-row STA
 	;psong LDA ;cur-s STA
-	#01 ;dirty STA
 	#00 ;tv STA
 	&lp
 		;psong LDA ;prow LDA ;tv LDA ;cell-addr JSR2
@@ -174,7 +194,7 @@ JMP2r
 
 ( off -- addr* : champ de la voix courante. 00 ph, 01 type, 02 niveau*, 04 arate*, 06 drate*,
   08 slvl*, 0a rrate*, 0c onde, 0d arp, 0e pulse*, 10 pdepth*, 12 prate*, 14 pacc*, 16 t*,
-  18 porte*, 1b note, 1c ap )
+  18 porte*, 1b note, 1c ap, 1d dernier niveau rendu, 1e derniere largeur, 1f rendu valide )
 @vf
 	#00 SWP ;vp LDA2 ADD2
 JMP2r
@@ -247,6 +267,7 @@ JMP2r
 	#0000 #14 ;vf JSR2 STA2
 	#0000 #16 ;vf JSR2 STA2
 	#00 #1c ;vf JSR2 STA
+	#00 #1f ;vf JSR2 STA
 	( tampon de cette voix, longueur : 0x40 echantillons, 0x120 pour le bruit )
 	#00 ;vi LDA #0120 MUL2 ;vbuf ADD2 #0c ;vport JSR2 DEO2
 	#0c ;vf JSR2 LDA #08 AND ;&nz JCN2
@@ -299,7 +320,7 @@ JMP2r
 	&env
 	( phase de la modulation de largeur d'impulsion : 64 pas = 0x4000 )
 	#14 ;vf JSR2 LDA2 #12 ;vf JSR2 LDA2 #0021 MUL2 ADD2 #3fff AND2 #14 ;vf JSR2 STA2
-	;voice-render JSR2
+	;maybe-render JSR2
 	( arpege )
 	#0d ;vf JSR2 LDA ;&arp JCN2
 	&no
@@ -333,6 +354,26 @@ JMP2r
 	&st #06 SFT2 NIP ;rt STA
 JMP2r
 
+( ne recalcule la forme d'onde que si elle a change : au declenchement (1f = 0), si la largeur
+  d'impulsion bouge, ou si le niveau s'ecarte d'au moins 8 du dernier rendu. 1d = dernier niveau,
+  1e = derniere largeur. Une note tenue sans PWM ne coute plus rien. )
+@maybe-render
+	#1f ;vf JSR2 LDA #00 EQU ;&do JCN2
+	;calc-pw JSR2
+	;rt LDA #1e ;vf JSR2 LDA NEQ ;&do JCN2
+	#02 ;vf JSR2 LDA #1d ;vf JSR2 LDA
+	OVR OVR LTH ;&lo JCN2
+	SUB ;&cmp JMP2
+	&lo SWP SUB
+	&cmp #08 LTH ;&skip JCN2
+	&do
+	;voice-render JSR2
+	#01 #1f ;vf JSR2 STA
+	;rl LDA #1d ;vf JSR2 STA
+	;rt LDA #1e ;vf JSR2 STA
+	&skip
+JMP2r
+
 ( recalcule la forme d'onde de la voix courante : onde, largeur, niveau )
 @voice-render
 	#00 ;vi LDA #0120 MUL2 ;vbuf ADD2 ;rd STA2
@@ -340,8 +381,22 @@ JMP2r
 	#0c ;vf JSR2 LDA ;rw STA
 	;calc-pw JSR2
 	;rw LDA #08 AND ;&noise JCN2
+	;rw LDA #04 EQU ;render-pulse JCN2
 	;render-wave JMP2
 	&noise ;render-noise JMP2
+
+( impulsion seule : deux niveaux calcules une fois, puis simple remplissage )
+@render-pulse
+	#ff ;rl LDA ;scale JSR2 ;rhi STA
+	#00 ;rl LDA ;scale JSR2 ;rlo STA
+	#00 ;ri STA
+	&l
+		;ri LDA ;rt LDA LTH ;&h JCN2
+		;rlo LDA ;&st JMP2
+		&h ;rhi LDA
+		&st ;rd LDA2 ;ri LDA #00 SWP ADD2 STA
+		;ri LDA INC DUP ;ri STA #40 LTH ;&l JCN2
+JMP2r
 
 @render-wave
 	#00 ;ri STA
@@ -1585,36 +1640,43 @@ JMP2r
 @draw-grid
 	#00 ;gr STA
 	&row
-		;gr LDA ;hl-row LDA EQU
-		;hl-song LDA ;cur-s LDA EQU AND
-		;playing LDA AND ;hlf STA
-		#01 ;col STA
-		;gr LDA #03 AND ;&nb JCN2
-		#03 ;col STA
-		&nb
-		;hlf LDA #00 EQU ;&nh JCN2
-		#02 ;col STA
-		&nh
-		#01 ;gr LDA #05 ADD ;at JSR2
-		;gr LDA ;put-hex JSR2
-		#00 ;gv STA
-		&cell
-			#04 ;gv LDA #06 MUL ADD ;gr LDA #05 ADD ;at JSR2
-			;hlf LDA ;&c2 JCN2
-			#01 ;&cs JMP2
-			&c2 #02
-			&cs ;col STA
-			;gv LDA ;cur-v LDA EQU ;gr LDA ;cur-r LDA EQU AND #00 EQU ;&nocur JCN2
-			#0c ;col STA
-			&nocur
-			;cur-s LDA ;gr LDA ;gv LDA ;cell-addr JSR2
-			DUP2 LDA DUP ;put-note JSR2
-			#fe LTH ;&hi JCN2
-			POP2 ;&cn JMP2
-			&hi #20 ;put JSR2 INC2 LDA ;put-nib JSR2
-			&cn
-			;gv LDA INC DUP ;gv STA #04 LTH ;&cell JCN2
+		;draw-row JSR2
 		;gr LDA INC DUP ;gr STA #10 LTH ;&row JCN2
+JMP2r
+
+( ligne gr de la grille : numero puis 4 cases de 6 colonnes, completees par des espaces pour
+  effacer l'ancien contenu quand on ne redessine pas tout l'ecran )
+@draw-row
+	;gr LDA ;hl-row LDA EQU
+	;hl-song LDA ;cur-s LDA EQU AND
+	;playing LDA AND ;hlf STA
+	#01 ;col STA
+	;gr LDA #03 AND ;&nb JCN2
+	#03 ;col STA
+	&nb
+	;hlf LDA #00 EQU ;&nh JCN2
+	#02 ;col STA
+	&nh
+	#01 ;gr LDA #05 ADD ;at JSR2
+	;gr LDA ;put-hex JSR2
+	#00 ;gv STA
+	&cell
+		#04 ;gv LDA #06 MUL ADD ;gr LDA #05 ADD ;at JSR2
+		;hlf LDA ;&c2 JCN2
+		#01 ;&cs JMP2
+		&c2 #02
+		&cs ;col STA
+		;gv LDA ;cur-v LDA EQU ;gr LDA ;cur-r LDA EQU AND #00 EQU ;&nocur JCN2
+		#0c ;col STA
+		&nocur
+		;cur-s LDA ;gr LDA ;gv LDA ;cell-addr JSR2
+		DUP2 LDA DUP ;put-note JSR2
+		#fe LTH ;&hi JCN2
+		POP2 #01 ;col STA #20 ;put JSR2 #20 ;put JSR2 ;&cn JMP2
+		&hi #20 ;put JSR2 INC2 LDA ;put-nib JSR2
+		&cn
+		#01 ;col STA #20 ;put JSR2
+		;gv LDA INC DUP ;gv STA #04 LTH ;&cell JCN2
 JMP2r
 
 ( ---- vue instruments ---- )

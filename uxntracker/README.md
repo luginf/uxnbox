@@ -72,6 +72,25 @@ AZERTY  bas  : w s x d c v g b h n j ,    haut : a . z . e r . t . y . u
 Chaque rangée est une octave chromatique de C à B ; la rangée du haut est l'octave au-dessus.
 En AZERTY les dièses de la rangée du haut ne sont pas des touches ASCII sans Maj, ils manquent.
 
+## Sur Atari ST (uxntari)
+
+Prendre `tracker-ds.rom` : l'écran de la version normale (384x240) dépasse la basse résolution de l'ST
+(320x200), celui de la variante DS (256x192) tient. `uxntari` ne lit pas le joystick (un joystick Atari n'a
+qu'un bouton de tir) : la manette est émulée par le clavier de l'ST.
+
+| Bouton de la manette | Touche sur l'ST |
+|---|---|
+| croix | flèches |
+| A | Control |
+| B | Alt |
+| Select | Shift (gauche ou droit) |
+| Start | Home |
+
+Les modificateurs sont lus en continu, donc les combinaisons (A + flèche, B + flèche, Select + flèche) se
+tiennent normalement. Le clavier de l'ST ne signale pas le relâchement des flèches : une flèche est
+considérée relâchée quelques images après la dernière répétition, ce qui suffit pour les appuis brefs.
+Les touches de piano du mode jazz (Échap) et le nom de fichier se saisissent au clavier ST comme ailleurs.
+
 ## Menu fichier
 
 Entrée (ou Select + bas depuis l'écran instruments) ouvre le menu : **NAME** (nom du fichier, modifiable : a-z, 0-9, `.`, `_`, `-`, 15 caractères),
