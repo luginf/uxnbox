@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Variante Nintendo DS : ecran 256x192, lignes de 8 px, sans panneau d'aide.
+"""Variante Nintendo DS : ecran 256x192, lignes de 8 px, aide dans les reglages.
 
 Derive tracker-ds.tal de tracker.tal par remplacements exacts (chacun doit
 tomber une seule fois), puis l'assemble en tracker-ds.rom avec uxncli/drifloon.
@@ -14,8 +14,6 @@ SUBS = [
     ("#0180 .Screen/width DEO2", "#0100 .Screen/width DEO2"),
     ("#00f0 .Screen/height DEO2", "#00c0 .Screen/height DEO2"),
     ("#00 SWP #000a MUL2 ;cy STA2", "#00 SWP #0008 MUL2 ;cy STA2"),
-    ("\t;draw-help JSR2\n", ""),
-    ("\t#1e #00 ;at JSR2", "\t#1b #00 ;at JSR2"),
     ("#01 ;swapab STA", "#00 ;swapab STA"),
 ]
 

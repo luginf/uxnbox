@@ -25,13 +25,28 @@ int main(int argc, char** argv) {
     }
     printf("\n");
   }
-  for (int r = 0; r < 8; r++) {
+  for (int r = 0; r < 64; r++) {
+    bool any = false;
+    for (int c = 0; c < p->tracksCount; c++) any |= p->song[r][c] != EMPTY_VALUE_16;
+    if (!any && r >= 8) continue;
     printf("song %d:", r);
     for (int c = 0; c < p->tracksCount; c++)
       printf(" %d", p->song[r][c] == EMPTY_VALUE_16 ? -1 : p->song[r][c]);
     printf("\n");
   }
-  for (int ph = 0; ph < 32; ph++) {
+  for (int ch = 0; ch < 128; ch++) {
+    bool any = false;
+    for (int r = 0; r < 16; r++) any |= p->chains[ch].rows[r].phrase != EMPTY_VALUE_16;
+    if (!any) continue;
+    printf("chain %d:", ch);
+    for (int r = 0; r < 16; r++) {
+      const ChainRow& row = p->chains[ch].rows[r];
+      if (row.phrase == EMPTY_VALUE_16) printf(" --");
+      else printf(" %d/%d", (int)row.phrase, (int)(int8_t)row.transpose);
+    }
+    printf("\n");
+  }
+  for (int ph = 0; ph < 128; ph++) {
     if (phraseIsEmpty(p.get(), ph)) continue;
     printf("phrase %d:", ph);
     for (int r = 0; r < 16; r++)

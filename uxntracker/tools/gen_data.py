@@ -213,34 +213,41 @@ TEXTS = [
     ("t-sid-4", "\n- SID parameters: "),
     ("t-tail", "\n## Tables\nEOF\n"),
     ("t-dd", "--"),
+    ("t-dashes", "---"),
 ]
 
 # --------------------------------------------------- chaines de l'interface
-HELP = [
-    "A PLACE / REPLAY",
-    "A+L/R NOTE +-1",
-    "A+U/D NOTE +-12",
-    "A+B CLEAR / OFF",
-    "B+U/D PATTERN",
-    "B+L/R INSTRUMENT",
-    "SEL+L/R SCREENS",
-    "SEL+U/D TEMPO",
-    "START PLAY",
-    "ESC JAZZ PIANO KEYS",
-    None,                   # rangee de touches selon la disposition (jazz)
-    "[ ] OR -/= OCTAVE",
-    "TAB INSTRUMENTS",
-    "ENTER FILE MENU",
-    "CTRL=A ALT=B",
-    "SHF=SEL HOME=START",
-]
-IHELP = [
-    "UP/DOWN FIELD",
-    "A+L/R VALUE FINE",
-    "A+U/D VALUE BIG",
-    "A+START PREVIEW",
-    "B+L/R INSTRUMENT",
-    "SEL+LEFT BACK",
+HELP_PAGES = [
+    ["A TAP PLACE / REPLAY",
+     "A+L/R VALUE +-1",
+     "A+U/D VALUE +-12 / 16",
+     "A+B CLEAR / OFF",
+     "B+U/D SONG JUMP 16",
+     "B+DIRS CHAIN SONG CELL",
+     "B+DIRS PHRASE CHAIN/TRK",
+     "B+L/R INST PREV / NEXT",
+     "SEL+DIRS SCREEN MAP",
+     "START PLAY / STOP",
+     "A+START PREVIEW (INST)"],
+    ["SONG 64 ROWS X 4 TRACKS",
+     "CHAIN 16 X PHRASE + TRANSP",
+     "PHRASE 16 X NOTE + INST",
+     "INSTRUMENT PRESET LINE",
+     " A+L/R PICKS A PRESET",
+     " AND ITS NAME, KEEPS NOTES",
+     " THEN TUNE WAVE AND ADSR",
+     "PROJECT NAME RANDOM",
+     " SAVE LOAD NEW SONG",
+     "GROOVE SPEED (TEMPO)",
+     "SETTINGS A/B SWAP KEYBOARD"],
+    ["ESC JAZZ PIANO KEYS",
+     None,                   # rangee de touches selon la disposition (jazz)
+     "[ ] OR -/= OCTAVE",
+     "TAB NEXT  ENTER PROJECT",
+     "' OFF  BKSP CLEAR",
+     "\\ A/B SWAP ; LAYOUT",
+     "ALT=A CTRL=B IF SWAPPED",
+     "SHF=SEL HOME=START"],
 ]
 UI = [
     ("s-title", "UXN TRACKER"),
@@ -280,20 +287,50 @@ UI = [
     ("s-defname", "song.cct"),
     ("s-square", "SQUARE"),
     ("s-m0", "NAME "),
+    ("s-mr", "RANDOM NAME"),
+    ("s-ehint", "UP/DN CHAR L/R MOVE A OK B DEL"),
+    ("s-fhint", "A LOAD  B BACK"),
+    ("s-lload", "LOAD FILE"),
     ("s-m1", "SAVE"),
     ("s-m2", "LOAD"),
     ("s-m3", "NEW SONG"),
     ("s-m4", "CLOSE"),
-    ("s-m5", "A/B SWAP "),
     ("s-on", "ON"),
-    ("s-menu", "FILE"),
+    ("s-menu", "PROJECT"),
     ("s-unsaved", "UNSAVED CHANGES"),
     ("s-c1", "FILE EXISTS. OVERWRITE? Y/N"),
-    ("s-c2", "LOAD: DISCARD UNSAVED WORK? Y/N"),
-    ("s-c3", "NEW: DISCARD UNSAVED WORK? Y/N"),
+    ("s-c2", "LOAD: DISCARD UNSAVED? Y/N"),
+    ("s-c3", "NEW: DISCARD UNSAVED? Y/N"),
     ("s-mhint", "A/ENTER OK  B/ESC BACK"),
     ("s-ay-note", "AY SQUARE: NO PARAMETERS"),
     ("s-inst-h", "INSTRUMENT "),
+    ("s-map", "SCPI"),
+    ("s-t0", "SONG"),
+    ("s-t1", "CHAIN"),
+    ("s-t2", "PHRASE"),
+    ("s-t3", "INSTRUMENT"),
+    ("s-t4", "PROJECT"),
+    ("s-t5", "SETTINGS"),
+    ("s-t6", "GROOVE"),
+    ("s-t7", "HELP"),
+    ("s-hpg", "PAGE "),
+    ("s-hof", "/3  L/R PAGE  B QUIT"),
+    ("s-preset", "PRESET"),
+    ("s-chn", "CHAIN "),
+    ("s-phr", "PHRASE "),
+    ("s-row", "ROW "),
+    ("s-trk", "TRK "),
+    ("s-ph", "PH"),
+    ("s-tr", "TR"),
+    ("s-hnote", "NOTE"),
+    ("s-hin", "IN"),
+    ("s-nofree", "NO FREE SLOT"),
+    ("s-spdl", "SPEED"),
+    ("s-ghint", "A+L/R CHANGE"),
+    ("s-set0", "A/B SWAP"),
+    ("s-set1", "KEYBOARD"),
+    ("s-set2", "HELP"),
+    ("s-shint", "A TOGGLE / OPEN"),
 ]
 FIELDS = [   # (nom, parametre SID, max, pas, grand pas)
     ("WAVE", 1, 8, 1, 1),
@@ -331,7 +368,7 @@ def plain(label, s):
     toks.append("00")
     return "@%s %s" % (label, " ".join(toks))
 
-def help_block(name, items, x, y0, use_layout):
+def help_block(name, items, x, y0):
     out = ["@" + name, "\t#01 ;col STA"]
     for i, h in enumerate(items):
         out.append("\t#%02x #%02x ;at JSR2" % (x, y0 + i))
@@ -370,7 +407,9 @@ def tables_block():
     out.append("@ifnames " + " ".join("=ifn%d" % i for i in range(len(FIELDS))))
     for i, f in enumerate(FIELDS):
         out.append(plain("ifn%d" % i, f[0]))
-    out.append("@mitems =s-m0 =s-m1 =s-m2 =s-m3 =s-m4 =s-m5")
+    out.append("@mitems =s-m0 =s-mr =s-m1 =s-m2 =s-m3 =s-m4")
+    out.append("@titles " + " ".join("=s-t%d" % i for i in range(8)))
+    out.append("@setitems =s-set0 =s-set1 =s-set2")
     out.append("@presets ( name x10, then wave pulse depth rate A D S R gate arp )")
     for (name, *vals) in PRESETS:
         assert len(name) <= 9
@@ -384,8 +423,7 @@ def semis_block():
 
 def generated():
     parts = [font_block(), periods_block(), semis_block(), tables_block(),
-             help_block("draw-help", HELP, 29, 4, True),
-             help_block("draw-ihelp", IHELP, 2, 18, False)]
+             "@hpages =hpa =hpb =hpc"] + [help_block(n, pg, 2, 4) for n, pg in zip(("hpa", "hpb", "hpc"), HELP_PAGES)]
     for label, s in UI:
         parts.append(plain(label, s))
     for label, s in TEXTS:
